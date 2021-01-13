@@ -1,0 +1,6 @@
+*.pyc
+*.cpython-37.pyc
+rar/
+__pycache__/
+csv/
+xlsx/
