@@ -68,8 +68,8 @@ def plotInstrumentTimeProfile(bid_ask_counts, bid_col_name, ask_col_name, instru
 	"""
 	fig, axes = plt.subplots(nrows=2, ncols=1)
 	bid_ax, ask_ax = axes
-	bid_ask_counts[bid_col_name].plot(ax=bid_ax, kind='bar')
-	bid_ask_counts[ask_col_name].plot(ax=ask_ax, kind='bar', color='orange')
+	bid_ask_counts[bid_col_name].plot(ax=bid_ax)
+	bid_ask_counts[ask_col_name].plot(ax=ask_ax, color='orange')
 	bid_ax.set_xlim((bid_ask_counts.index[0], bid_ask_counts.index[-1]))
 	bid_ax.set_xlabel('')
 	bid_ax.set_xticks([])
@@ -102,7 +102,7 @@ def getInstrumentTimeProfile(instrument_name, bid_ask_frame):
 #	printFileInfo(csv_file)
 
 csv_files = glob.glob(os.path.join(csv_dir,'*'))
-csv_file = csv_files[2]
+csv_file = csv_files[0]
 bid_ask_frame = pd.read_csv(csv_file, parse_dates=[0], index_col=0)
 contract_names = extractContractNameFromColumns(bid_ask_frame.columns)
 [getInstrumentTimeProfile(con, bid_ask_frame) for con in contract_names[:3]]
