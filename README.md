@@ -49,7 +49,7 @@ My suggestion unless you have a better idea (which I am hoping!)
 Fill in cells for times where each variable is open
 
 1. have start time 1, end time 1, start time 2, end time 2 eg 0630, 1515, 1600, 2000
-1. for each day, all cells are blank up to 630am
+2. for each day, all cells are blank up to 630am
 3. they are still blank until get tick
 4. ffill down to next tick up to 1515
 5. cells blank until 1600
@@ -90,3 +90,10 @@ Everytime you trade you need to hedge with the indept vars.
 e.g. if buy $1m kwn, you sell $500k CNH, sell $250k NTN, etc using betas from indept vars.
 Also, worth rerunning lasso & limiting to 3 indept vars & hedge with these 3 instead of the 5 you use to model kwn.
 This can be 2nd iteration.
+
+#### My own thoughts
+* Clean product by product?
+* Look at distribution of data existance over minutes of the day for an impression of when we _should_ have data.
+
+TODO: 
+  - function for extracting distribution of existing data. Complications include: holidays, weekends. The point is to identify missing data, and understand more about the data. Our ultimate goal is to clean up the data.
