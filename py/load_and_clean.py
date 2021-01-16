@@ -149,13 +149,49 @@ def getTickerBidAskColNames(ticker):
 	ask_col_name = ticker + '_Ask'
 	return bid_col_name, ask_col_name
 
+def getOpenCloseDatetime(open_time, close_time, date):
+	"""
+	For getting the opening and closing date-time of a ticker, assuming the opening time 
+	is on the given 'date'.
+	Arguments:	open_time, datetime.time
+				close_time, datetime.time
+				date, datetime.date
+	Returns:	open_datetime, datetime.datetime
+				close_datetime, datetime.datetime
+	"""
+	is_single_day_session = open_time < close_time
+	if is_single_day_session:
+		open_datetime = dt.datetime.combine(date, open_time)
+		close_datetime = dt.datetime.combine(date, close_time)
+	else:
+		next_date = date + dt.timedelta(days=1)
+		open_datetime = dt.datetime.combine(date, open_time)
+		close_datetime = dt.datetime.combine(next_date, close_time)
+	return open_datetime, close_datetime
+
+def fillForwardBidAskSeries(bid_ask_series, open_datetime, close_datetime):
+	"""
+	For getting the trading part of a bid/ask series and filling that forward.
+	Arguments:	bid_ask_series, pandas Series
+				open_datetime,
+				close_datetime
+	Returns:	filled_trading_bid_ask_series, pandas Series
+	"""
+	trading_bid_ask_series = bid_ask_series[(bid_ask_series.index >= open_datetime) & 
+					(bid_ask_series.index <= close_datetime)]
+	is_all_null = np.invert(trading_bid_ask_series.notna().any())
+	if is_all_null:
+		return pd.Series(dtype=float) # holiday or weekend, move on to the next date.
+	filled_trading_bid_ask_series = trading_bid_ask_series.ffill()
+	return filled_trading_bid_ask_series
+
 def cleanTickerBidsAsks(bid_ask_series, bid_ask_dates, open_close_times, num_sessions):
 	"""
 	For cleaning the up the bid and ask data. We want to fill forward bids and asks during a trading session.
 	But we don't to insert data on days where there is none (holidays, weekends).
 	We don't want to insert bids or asks before the first bid or quote of the session either.
 	Profile this code because it may be repeated often.
-	Arguments:	bid_ask_series, pandas DataFrame
+	Arguments:	bid_ask_series, pandas Series
 				bid_ask_dates, array of datetime.date
 				open_close_times, list of opening and closing times
 				num_sessions, the number of trading sessions for that ticker.
@@ -163,20 +199,30 @@ def cleanTickerBidsAsks(bid_ask_series, bid_ask_dates, open_close_times, num_ses
 	"""
 	# need to check that open time < close time
 	is_one_session = num_sessions == 1
+	filled_bid_ask_series = pd.Series(dtype=float)
 	if is_one_session:
 		open_time, close_time = open_close_times[0]
-		is_single_day_session = open_time < close_time
-		if is_single_day_session:
-			for date in bid_ask_dates:
-				date_bid_ask_series = bid_ask_series[bid_ask_series.index.date == date]
-				is_all_null_date = np.invert(date_bid_ask_series.notna().any())
-				trading_bid_ask_series = date_bid_ask_series[(date_bid_ask_series.index.time > open_time) 
-															& (date_bid_ask_series.index.time < close_time)]
-				filled_trading_bid_ask_series = trading_bid_ask_series.ffill()
-		else:
-			for date in bid_ask_dates:
-				date_bid_ask_series = bid_ask_series[bid_ask_series.index.date == date]
-
+		for date in bid_ask_dates:
+			open_datetime, close_datetime = getOpenCloseDatetime(open_time, close_time, date)
+			filled_trading_bid_ask_series = fillForwardBidAskSeries(bid_ask_series, 
+													open_datetime, close_datetime)
+			filled_bid_ask_series = pd.concat([filled_bid_ask_series, filled_trading_bid_ask_series])
+	else:
+		first_open_time, first_close_time = open_close_times[0]
+		second_open_time, second_close_time = open_close_times[1]
+		for date in bid_ask_dates:
+			first_open_datetime, first_close_datetime = getOpenCloseDatetime(first_open_time, 
+															first_close_time, date)
+			second_open_datetime, second_close_datetime = getOpenCloseDatetime(second_open_time, 
+															second_close_time, date)
+			first_filled_trading_bid_ask_series = fillForwardBidAskSeries(bid_ask_series, 
+													first_open_datetime, first_close_datetime)
+			second_filled_trading_bid_ask_series = fillForwardBidAskSeries(bid_ask_series, 
+													second_open_datetime, second_close_datetime)
+			filled_bid_ask_series = pd.concat([filled_bid_ask_series, first_filled_trading_bid_ask_series,
+										second_filled_trading_bid_ask_series])
+	bid_ask_series.update(filled_bid_ask_series)
+	return bid_ask_series
 
 open_close = loadOpenCloseTimesCsv()
 csv_files = glob.glob(os.path.join(csv_dir,'*'))
@@ -188,10 +234,11 @@ ticker = 'GC1 Comdty' # we need special rules for some tickers, check Dan's emai
 open_close_times, num_sessions = getOpenCloseTimesForTicker(open_close, ticker)
 bid_col_name, ask_col_name = getTickerBidAskColNames(ticker)
 bid_ask_series = bid_ask_all_frame[bid_col_name]
-
+clean_bid_ask_series = cleanTickerBidsAsks(bid_ask_series, bid_ask_dates, open_close_times, num_sessions)
 
 
 #[getInstrumentTimeProfile(ticker, bid_ask_frame) for ticker in ticker_names[:3]]
 #plt.show() # TODO save instead of show
 
 # TODO: tickers: GC1 Comdty, TP1 Index
+#		does the cleanTickerBidsAsks function work as required? Unit tests
