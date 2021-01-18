@@ -136,7 +136,7 @@ def getTickerTimeProfile(ticker, bid_ask_frame):
 	bid_ask_counts = bid_ask_frame.groupby('time_of_day').aggregate('sum')
 	frame_dates = getDataDatesFromFrame(bid_ask_frame)
 	num_weekdays = np.sum([date.weekday() < 5 for date in frame_dates])
-	plotTickerTimeProfile(bid_ask_counts, bid_col_name, ask_col_name, instrument_name, num_weekdays)
+	plotTickerTimeProfile(bid_ask_counts, bid_col_name, ask_col_name, ticker, num_weekdays)
 
 def getTickerBidAskColNames(ticker):
 	"""
@@ -180,10 +180,13 @@ def fillForwardBidAskSeries(bid_ask_series, open_datetime, close_datetime):
 	trading_bid_ask_series = bid_ask_series[(bid_ask_series.index >= open_datetime) & 
 					(bid_ask_series.index <= close_datetime)]
 	is_all_null = np.invert(trading_bid_ask_series.notna().any())
+	has_nulls = trading_bid_ask_series.isna().any()
 	if is_all_null:
 		return pd.Series(dtype=float) # holiday or weekend, move on to the next date.
+	if not has_nulls:
+		return pd.Series(dtype=float) # trading series full, no update required
 	filled_trading_bid_ask_series = trading_bid_ask_series.ffill()
-	return filled_trading_bid_ask_series
+	return filled_trading_bid_ask_series[filled_trading_bid_ask_series.notna() & trading_bid_ask_series.isna()]
 
 def cleanTickerBidsAsks(bid_ask_series, bid_ask_dates, open_close_times, num_sessions):
 	"""
@@ -198,35 +201,24 @@ def cleanTickerBidsAsks(bid_ask_series, bid_ask_dates, open_close_times, num_ses
 	Returns:	pandas DataSeries
 	"""
 	# need to check that open time < close time
-	is_one_session = num_sessions == 1
 	filled_bid_ask_series = pd.Series(dtype=float)
-	if is_one_session:
-		open_time, close_time = open_close_times[0]
-		for date in bid_ask_dates:
+	days_with_ff_data = 0
+	for date in bid_ask_dates:
+		for open_time, close_time in open_close_times:
 			open_datetime, close_datetime = getOpenCloseDatetime(open_time, close_time, date)
 			filled_trading_bid_ask_series = fillForwardBidAskSeries(bid_ask_series, 
 													open_datetime, close_datetime)
-			filled_bid_ask_series = pd.concat([filled_bid_ask_series, filled_trading_bid_ask_series])
-	else:
-		first_open_time, first_close_time = open_close_times[0]
-		second_open_time, second_close_time = open_close_times[1]
-		for date in bid_ask_dates:
-			first_open_datetime, first_close_datetime = getOpenCloseDatetime(first_open_time, 
-															first_close_time, date)
-			second_open_datetime, second_close_datetime = getOpenCloseDatetime(second_open_time, 
-															second_close_time, date)
-			first_filled_trading_bid_ask_series = fillForwardBidAskSeries(bid_ask_series, 
-													first_open_datetime, first_close_datetime)
-			second_filled_trading_bid_ask_series = fillForwardBidAskSeries(bid_ask_series, 
-													second_open_datetime, second_close_datetime)
-			filled_bid_ask_series = pd.concat([filled_bid_ask_series, first_filled_trading_bid_ask_series,
-										second_filled_trading_bid_ask_series])
+			if filled_trading_bid_ask_series.size > 0:
+				days_with_ff_data += 1	
+				filled_bid_ask_series = pd.concat([filled_bid_ask_series, filled_trading_bid_ask_series])
 	bid_ask_series.update(filled_bid_ask_series)
+	print(dt.datetime.now().isoformat() + ' INFO: ' + bid_ask_series.name + 
+			', num days with fills = ' + str(days_with_ff_data))
 	return bid_ask_series
 
 open_close = loadOpenCloseTimesCsv()
 csv_files = glob.glob(os.path.join(csv_dir,'*'))
-csv_file = csv_files[1]
+csv_file = csv_files[2]
 bid_ask_all_frame = pd.read_csv(csv_file, parse_dates=[0], index_col=0)
 bid_ask_dates = getDataDatesFromFrame(bid_ask_all_frame)
 ticker_names = extractContractNameFromColumns(bid_ask_all_frame.columns)
