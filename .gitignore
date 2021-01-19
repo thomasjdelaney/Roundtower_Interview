@@ -2,5 +2,7 @@
 *.cpython-37.pyc
 rar/
 __pycache__/
-csv/
 xlsx/
+logs/
+csv/all_clean.csv
+csv/All_Fut_FX_Data*
