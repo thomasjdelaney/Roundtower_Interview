@@ -23,20 +23,6 @@ py_dir = os.path.join(proj_dir, 'py')
 sys.path.append(py_dir)
 from Roundtower import *
 
-def loadOpenCloseTimesCsv(csv_dir):
-	"""
-	For loading in the csv file that contains opening and closing times info.
-	Arguments:	csv_dir, str
-	Returns:	pandas DataFrame
-	"""
-	str_to_time_converter = lambda x:dt.datetime.strptime(x, '%H:%M:%S').time()
-	open_close = pd.read_csv(os.path.join(csv_dir, 'open_close.csv'),
-		converters={'FUT_TRADING_HRS':lambda x:'' if not x else x,
-			'TRADING_DAY_START_TIME_EOD':str_to_time_converter,
-			'TRADING_DAY_END_TIME_EOD':str_to_time_converter}, 
-		dtype={'Bloomberg Ticker':str}, index_col=0)
-	return open_close
-
 def getOpenCloseTimesForTicker(open_close, ticker):
 	"""
 	For getting the opening anc closing times for a given ticker.
@@ -130,24 +116,13 @@ def getTickerTimeProfile(ticker, bid_ask_frame):
 				bid_ask_frame, pandas dataFrame
 	Returns:	displays figures showing distributions of bid/ask times
 	"""
-	bid_col_name, ask_col_name = getTickerBidAskColNames(ticker)
+	bid_col_name, ask_col_name, mid_col_name = getTickerBidAskMidColNames(ticker)
 	bid_ask_frame = bid_ask_frame[[bid_col_name, ask_col_name]].notna()
 	bid_ask_frame['time_of_day'] = bid_ask_frame.index.time
 	bid_ask_counts = bid_ask_frame.groupby('time_of_day').aggregate('sum')
 	frame_dates = getDataDatesFromFrame(bid_ask_frame)
 	num_weekdays = np.sum([date.weekday() < 5 for date in frame_dates])
 	plotTickerTimeProfile(bid_ask_counts, bid_col_name, ask_col_name, ticker, num_weekdays)
-
-def getTickerBidAskColNames(ticker):
-	"""
-	For getting the bid and ask column names from a ticker.
-	Arguments: 	ticker, str
-	Returns:	bid_col_name, str
-				ask_col_name, str
-	"""
-	bid_col_name = ticker + '_Bid'
-	ask_col_name = ticker + '_Ask'
-	return bid_col_name, ask_col_name
 
 def getOpenCloseDatetime(open_time, close_time, date):
 	"""
@@ -263,7 +238,7 @@ def cleanTickerBidsAsks(bid_ask_series, bid_ask_dates, open_close_times):
 		if nulled_not_trading_bid_ask_series.size > 0:
 			non_sessions_with_data += 1
 			nulled_bid_ask_series = pd.concat([nulled_bid_ask_series, nulled_not_trading_bid_ask_series])
-	bid_ask_series.update(nulled_bid_ask_series)
+	bid_ask_series.loc[nulled_bid_ask_series.index] = np.nan
 	print(dt.datetime.now().isoformat() + ' INFO: ' + bid_ask_series.name + 
 			', num trading sessions with fills = ' + str(sessions_with_ff_data))
 	print(dt.datetime.now().isoformat() + ' INFO: ' + bid_ask_series.name + 
