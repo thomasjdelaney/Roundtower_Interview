@@ -215,7 +215,9 @@ def getTopFiveIndependentVars(dependent_ticker, hourly_returns, open_close, thre
 				hourly_returns, pandas DataFrame
 				open_close, pandas DataFrame
 				thresh, float, between 0 and 1, the threshold number of crossover returns to consider a ticker
-	Returns:	top_five_indep_vars, top_five_coefs
+	Returns:	top_five_indep_vars, as measured by absolute value of the coefficient 
+				top_five_coefs, the coefficients themselves
+				r_sq, the score of the model
 	"""
 	dependent_returns = getHourlyReturnsForTicker(dependent_ticker, hourly_returns, open_close)
 	independent_returns = hourly_returns.loc[dependent_returns.index, hourly_returns.columns != dependent_returns.name]
@@ -224,12 +226,20 @@ def getTopFiveIndependentVars(dependent_ticker, hourly_returns, open_close, thre
 	has_all_independent = independent_returns[crossover_cols].notna().all(axis=1)
 	independent_returns_all_valid = independent_returns.loc[has_all_independent, crossover_cols]
 	dependent_returns_with_crossover = dependent_returns[has_all_independent]
-	regression_model = LassoCV(n_jobs=-1)
-	regression_model.fit(independent_returns_all_valid, dependent_returns_with_crossover)
+	# regularized linear regression modelling below
+	test_size = dependent_returns_with_crossover.size//4
+	train_size = dependent_returns_with_crossover.size - test_size
+	train_X = independent_returns_all_valid.iloc[:train_size]
+	test_X = independent_returns_all_valid.iloc[train_size:]
+	train_y = dependent_returns_with_crossover.iloc[:train_size]
+	test_y = dependent_returns_with_crossover.iloc[train_size:]
+	regression_model = LassoCV(n_jobs=-1) # TODO: training and test
+	regression_model.fit(train_X, train_y)
+	r_sq = regression_model.score(test_X, test_y)
 	top_five_inds = np.abs(regression_model.coef_).argsort()[-5:]
 	top_five_indep_vars = np.array(crossover_cols)[top_five_inds]
 	top_five_coefs = regression_model.coef_[top_five_inds]
-	return top_five_indep_vars, top_five_coefs
+	return top_five_indep_vars, top_five_coefs, r_sq
 
 def getCoefFrameForTickers(tickers_to_model, hourly_returns, open_close, thresh=0.8):
 	"""
@@ -243,11 +253,13 @@ def getCoefFrameForTickers(tickers_to_model, hourly_returns, open_close, thresh=
 	"""
 	coef_frame = pd.DataFrame()
 	for ticker in tickers_to_model:
-		top_five_indep_vars, top_five_coefs = getTopFiveIndependentVars(ticker, hourly_returns, open_close)
+		top_five_indep_vars, top_five_coefs, r_sq = getTopFiveIndependentVars(ticker, hourly_returns, open_close, thresh)
 		ticker_model_frame = pd.DataFrame(columns=['independent_vars','coefs'], data=np.vstack([top_five_indep_vars, top_five_coefs]).T)
 		ticker_model_frame['dependent_var'] = ticker
+		ticker_model_frame['r_squared'] = r_sq
 		coef_frame = pd.concat([coef_frame, ticker_model_frame])
 	coef_frame['coefs'] = pd.to_numeric(coef_frame['coefs'])
+	coef_frame['r_squared'] = pd.to_numeric(coef_frame['r_squared'])
 	return coef_frame
 
 if not args.debug:
@@ -263,7 +275,7 @@ if not args.debug:
 	coef_frame = getCoefFrameForTickers(tickers_to_model, hourly_returns, open_close, thresh=0.8)
 	coef_frame_file_name = os.path.join(csv_dir,'coef_frame.csv')
 	coef_frame.to_csv(coef_frame_file_name)
-	print(dt.datetime.now().isoformat + ' INFO: ' + 'Saved: ' + coef_frame_file_name)
+	print(dt.datetime.now().isoformat() + ' INFO: ' + 'Saved: ' + coef_frame_file_name)
 	if args.fill_all:
 		full_mids = fillRemainingBlanks(special_filled.copy(), ticker_to_model)
 		full_mids_file_name = os.path.join(csv_dir, 'full_mids.csv')

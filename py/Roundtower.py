@@ -6,6 +6,8 @@ import datetime as dt
 import numpy as np
 import pandas as pd
 
+################## LOADING FUNCTIONS #########################
+
 def loadOpenCloseTimesCsv(csv_dir):
 	"""
 	For loading in the csv file that contains opening and closing times info.
@@ -19,6 +21,26 @@ def loadOpenCloseTimesCsv(csv_dir):
 			'TRADING_DAY_END_TIME_EOD':str_to_time_converter}, 
 		dtype={'Bloomberg Ticker':str}, index_col=0)
 	return open_close
+
+def loadCleanBidAsk(csv_dir):
+	"""
+	For loading the cleaned bid/ask data.
+	Arguments:	csv_dir, str
+	Returns:	pandas DataFrame
+	"""
+	return pd.read_csv(os.path.join(csv_dir,'all_clean.csv'), parse_dates=[0], index_col=0)
+
+def loadFullMids(csv_dir):
+	"""
+	For loading the csv with the full mid prices (after the first tick)
+	Arguments:	csv_dir, str, the path to the directory
+	Returns:	pandas, DataFrame
+	"""
+	return pd.read_csv(os.path.join(csv_dir, 'full_mids.csv'))
+
+#### END OF LOADING FUNCTIONS
+
+######################### TICKER & COLUMN NAMES #################################
 
 def extractTickerNameFromColumns(frame_columns):
 	"""
@@ -55,6 +77,10 @@ def getMatchedColNames(frame, pattern):
 	Returns:	list of str
 	"""
 	return [c for c in frame.columns if -1 < c.find(pattern)]
+
+###### END OF TICKER & COLUMN NAMES
+
+######################### OPEN & CLOSE TIMES ##########################
 
 def getOpenCloseTimesForTicker(open_close, ticker):
 	"""
