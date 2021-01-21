@@ -8,9 +8,10 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from itertools import product
 from sklearn.model_selection import KFold
-from sklearn.linear_model import LinearRegression
+from sklearn.linear_model import LinearRegression, LassoCV
 
 parser = argparse.ArgumentParser(description='For making a "returns" table.')
+parser.add_argument('-f', '--fill_all', help='Flag for filling all the columns. This can take up to 15 minutes', action='store_true', default=False)
 parser.add_argument('-d', '--debug', help='Enter debug mode.', action='store_true', default=False)
 args = parser.parse_args()
 
@@ -179,16 +180,92 @@ def fillRemainingBlanks(special_filled, ticker_to_model):
 			modelled_series = modelNullBlock(for_filling, null_block_indices, ticker_to_model, mid_col_name, predictor_names)
 			to_be_filled.update(modelled_series)
 		special_filled.update(to_be_filled[mid_col_name])
-	return special_filled[mid]
+	return special_filled[mid_col_names]
 
-print(dt.datetime.now().isoformat() + ' INFO: ' + 'Starting main function...')
-all_clean = loadCleanBidAsk(csv_dir)
-bid_ask_mid = addMidColumns(all_clean.copy())
-hourly_returns = getReturnTable(bid_ask_mid)
-ticker_to_model = getTickerRegressionModels(hourly_returns)
-print(dt.datetime.now().isoformat() + ' INFO: ' + 'Stage 2 done.')
-special_filled = fillSpecialColumns(bid_ask_mid.copy())
-full_mids = fillRemainingBlanks(special_filled.copy(), ticker_to_model)
-full_mids_file_name = os.path.join(csv_dir, 'full_mids.csv')
-full_mids.to_csv(full_mids_file_name)
-print(dt.datetime.now().isoformat() + ' INFO: ' + 'Done. ' + full_mids_file_name)
+def getHourlyReturnsForTicker(ticker, hourly_returns, open_close):
+	"""
+	Get the top 5 most influential tickers for the given dependent ticker.
+	Just use all the variables and L1 regularization (lasso) 
+	Arguments:	ticker, str
+				hourly_returns, pandas DataFrame
+				open_close, pandas DataFrame
+	Returns:	top_five_indep, list of str
+	"""
+	_,_, mid_col_name = getTickerBidAskMidColNames(ticker)
+	open_close_times, num_sessions = getOpenCloseTimesForTicker(open_close, ticker)
+	returns_dates = getDataDatesFromFrame(hourly_returns)
+	open_close_datetimes = getOpenCloseSessionsForDates(returns_dates, open_close_times)
+	ticker_returns = pd.Series(dtype=float)
+	for open_datetime, close_datetime in open_close_datetimes:
+		is_trading = (hourly_returns.index >= open_datetime) & (hourly_returns.index <= close_datetime)
+		session_returns = hourly_returns.loc[is_trading][mid_col_name]
+		is_real_session_return = session_returns.notna()
+		if not is_real_session_return.any():
+			continue # no data/not trading
+		ticker_returns = pd.concat([ticker_returns, session_returns.loc[is_real_session_return]])
+	ticker_returns.name = mid_col_name
+	return ticker_returns
+
+def getTopFiveIndependentVars(dependent_ticker, hourly_returns, open_close, thresh):
+	"""
+	Get the top 5 most influential tickers for the given dependent ticker.
+	If 'thresh' = 0.8, independent variables must have non-null returns at 80% of the dependent tickers
+	non-null return times. This controls the number of independent tickers that are considered.
+	Arguments:	dependent_ticker,  pandas DataFrame
+				hourly_returns, pandas DataFrame
+				open_close, pandas DataFrame
+				thresh, float, between 0 and 1, the threshold number of crossover returns to consider a ticker
+	Returns:	top_five_indep_vars, top_five_coefs
+	"""
+	dependent_returns = getHourlyReturnsForTicker(dependent_ticker, hourly_returns, open_close)
+	independent_returns = hourly_returns.loc[dependent_returns.index, hourly_returns.columns != dependent_returns.name]
+	num_crossover_returns = independent_returns.notna().sum()
+	crossover_cols = num_crossover_returns[num_crossover_returns > (thresh * dependent_returns.size)].index.to_list()
+	has_all_independent = independent_returns[crossover_cols].notna().all(axis=1)
+	independent_returns_all_valid = independent_returns.loc[has_all_independent, crossover_cols]
+	dependent_returns_with_crossover = dependent_returns[has_all_independent]
+	regression_model = LassoCV(n_jobs=-1)
+	regression_model.fit(independent_returns_all_valid, dependent_returns_with_crossover)
+	top_five_inds = np.abs(regression_model.coef_).argsort()[-5:]
+	top_five_indep_vars = np.array(crossover_cols)[top_five_inds]
+	top_five_coefs = regression_model.coef_[top_five_inds]
+	return top_five_indep_vars, top_five_coefs
+
+def getCoefFrameForTickers(tickers_to_model, hourly_returns, open_close, thresh=0.8):
+	"""
+	Get the top 5 tickers for linear regression modelling of each of the given tickers.
+	Returns a DataFrame containing the tickers and their coefficients.
+	Arguments:	tickers_to_model, pandas DataFrame,
+				hourly_returns, pandas DataFrame
+				open_close, pandas DataFrame
+				thresh, float, thresholding (see getTopFiveIndependentVars function)
+	Returns:	coef_frame, pandas DataFrame
+	"""
+	coef_frame = pd.DataFrame()
+	for ticker in tickers_to_model:
+		top_five_indep_vars, top_five_coefs = getTopFiveIndependentVars(ticker, hourly_returns, open_close)
+		ticker_model_frame = pd.DataFrame(columns=['independent_vars','coefs'], data=np.vstack([top_five_indep_vars, top_five_coefs]).T)
+		ticker_model_frame['dependent_var'] = ticker
+		coef_frame = pd.concat([coef_frame, ticker_model_frame])
+	coef_frame['coefs'] = pd.to_numeric(coef_frame['coefs'])
+	return coef_frame
+
+if not args.debug:
+	print(dt.datetime.now().isoformat() + ' INFO: ' + 'Starting main function...')
+	all_clean = loadCleanBidAsk(csv_dir)
+	bid_ask_mid = addMidColumns(all_clean.copy())
+	hourly_returns = getReturnTable(bid_ask_mid)
+	ticker_to_model = getTickerRegressionModels(hourly_returns)
+	print(dt.datetime.now().isoformat() + ' INFO: ' + 'Stage 2 done.')
+	special_filled = fillSpecialColumns(bid_ask_mid.copy())
+	tickers_to_model = ['KWN+1M BGN Curncy', 'IHN+1M BGN Curncy', 'FXY1 KMS1 Index', 'MXID Index']
+	open_close = loadOpenCloseTimesCsv(csv_dir)
+	coef_frame = getCoefFrameForTickers(tickers_to_model, hourly_returns, open_close, thresh=0.8)
+	coef_frame_file_name = os.path.join(csv_dir,'coef_frame.csv')
+	coef_frame.to_csv(coef_frame_file_name)
+	print(dt.datetime.now().isoformat + ' INFO: ' + 'Saved: ' + coef_frame_file_name)
+	if args.fill_all:
+		full_mids = fillRemainingBlanks(special_filled.copy(), ticker_to_model)
+		full_mids_file_name = os.path.join(csv_dir, 'full_mids.csv')
+		full_mids.to_csv(full_mids_file_name)
+	print(dt.datetime.now().isoformat() + ' INFO: ' + 'Done. ' + full_mids_file_name)

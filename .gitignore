@@ -5,4 +5,6 @@ __pycache__/
 xlsx/
 logs/
 csv/all_clean.csv
+csv/full_mids.csv
+csv/coef_frame.csv
 csv/All_Fut_FX_Data*

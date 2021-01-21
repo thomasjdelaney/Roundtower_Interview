@@ -23,33 +23,6 @@ py_dir = os.path.join(proj_dir, 'py')
 sys.path.append(py_dir)
 from Roundtower import *
 
-def getOpenCloseTimesForTicker(open_close, ticker):
-	"""
-	For getting the opening anc closing times for a given ticker.
-	Arguments:	open_close, pandas DataFrame
-				ticker, str
-	Returns:	open_close_times, list of pairs of datetime.time
-				num_sessions, int (1 or 2)
-	"""
-	str_to_time_converter = lambda x:dt.datetime.strptime(x, '%H:%M').time()
-	future_trading_hrs = open_close.loc[ticker]['FUT_TRADING_HRS']
-	has_future_session = future_trading_hrs != ''
-	if has_future_session:
-		has_two_sessions = future_trading_hrs.find('&') > -1
-		if has_two_sessions:
-			num_sessions = 2
-			str_sessions = [session.strip().split('-') for session in future_trading_hrs.split('&')]
-			open_close_times = [[str_to_time_converter(t) for t in session] for session in str_sessions]
-		else:
-			num_sessions = 1
-			open_close_times = [[str_to_time_converter(t)for t in future_trading_hrs.split('-')]]
-	else:
-		num_sessions = 1
-		opening_time = open_close.loc[ticker]['TRADING_DAY_START_TIME_EOD']
-		closing_time = open_close.loc[ticker]['TRADING_DAY_END_TIME_EOD']
-		open_close_times = [[opening_time, closing_time]]
-	return open_close_times, num_sessions
-
 def printFileInfo(csv_file):
 	"""
 	For printing some information about the given csv file. Assumes that the index of the file is a datetime.
@@ -66,14 +39,6 @@ def printFileInfo(csv_file):
 	print(dt.datetime.now().isoformat() + ' INFO: ' + 'End time: ' + str(file_frame.index[-1]))
 	file_column_names = file_frame.columns.to_list()
 	print(', '.join(file_column_names))	
-
-def getDataDatesFromFrame(frame):
-	"""
-	For getting the range of dates for which we expect to have data.
-	Arguments:	frame, pandas DataFrame
-	Returns:	
-	"""
-	return pd.unique(frame.index.date)
 
 def getAllTimes():
 	"""
@@ -123,46 +88,6 @@ def getTickerTimeProfile(ticker, bid_ask_frame):
 	frame_dates = getDataDatesFromFrame(bid_ask_frame)
 	num_weekdays = np.sum([date.weekday() < 5 for date in frame_dates])
 	plotTickerTimeProfile(bid_ask_counts, bid_col_name, ask_col_name, ticker, num_weekdays)
-
-def getOpenCloseDatetime(open_time, close_time, date):
-	"""
-	For getting the opening and closing date-time of a ticker, assuming the opening time 
-	is on the given 'date'.
-	Arguments:	open_time, datetime.time
-				close_time, datetime.time
-				date, datetime.date
-	Returns:	open_datetime, datetime.datetime
-				close_datetime, datetime.datetime
-	"""
-	is_single_day_session = open_time < close_time
-	if is_single_day_session:
-		open_datetime = dt.datetime.combine(date, open_time)
-		close_datetime = dt.datetime.combine(date, close_time)
-	else:
-		next_date = date + dt.timedelta(days=1)
-		open_datetime = dt.datetime.combine(date, open_time)
-		close_datetime = dt.datetime.combine(next_date, close_time)
-	return open_datetime, close_datetime
-
-def getOpenCloseSessionsForDates(bid_ask_dates, open_close_times):
-	"""
-	Get a two column matrix of open session times and close session times for each of the given dates.
-	Arguments:	bid_ask_dates, array of datetime.date
-				open_close_times, list of opening and close times
-	Returns:	two column array, first column is opening times of sessions, second column is 
-					closing times of same sessions
-	"""
-	num_sessions = len(open_close_times)
-	num_dates = bid_ask_dates.size
-	open_close_datetimes = np.empty(shape=(num_dates * num_sessions, 2), dtype=object)
-	for d,date in enumerate(bid_ask_dates):
-		previous_close_time = dt.time(0,0)
-		for s,(open_time, close_time) in enumerate(open_close_times): # looping through sessions
-			if open_time < previous_close_time: # the break between sessions (if there is one) included midnight (HC1) 
-				date = date + dt.timedelta(days=1) # increment one day
-			open_close_datetimes[d * num_sessions + s,0], open_close_datetimes[d * num_sessions + s,1] = getOpenCloseDatetime(open_time, close_time, date)
-			previous_close_time = close_time
-	return open_close_datetimes
 
 def fillForwardBidAskSeries(bid_ask_series, open_datetime, close_datetime):
 	"""
@@ -245,6 +170,23 @@ def cleanTickerBidsAsks(bid_ask_series, bid_ask_dates, open_close_times):
 			', num not-trading sessions with data = ' + str(non_sessions_with_data))
 	return bid_ask_series
 
+def mergeColumns(raw_bid_ask):
+	"""
+	Specifically for merging 'FXY1 Index' and 'KMS1 Index' inro 'FXY1 KMS1 Index'
+	Arguments:	raw_bid_ask, pandas DataFrame
+	Returns:	pandas DataFrame
+	"""
+	old_f_bid_series, old_f_ask_series = raw_bid_ask['FXY1 Index_Bid'], raw_bid_ask['FXY1 Index_Ask']
+	old_k_bid_series, old_k_ask_series = raw_bid_ask['KMS1 Index_Bid'], raw_bid_ask['KMS1 Index_Ask']
+	old_f_bid_series.update(old_k_bid_series)
+	old_f_ask_series.update(old_k_ask_series)
+	raw_bid_ask['FXY1 KMS1 Index_Bid'] = old_f_bid_series.values
+	raw_bid_ask['FXY1 KMS1 Index_Ask'] = old_f_ask_series.values
+	new_columns = raw_bid_ask.columns.to_list()
+	for c in ['FXY1 Index_Bid', 'FXY1 Index_Ask', 'KMS1 Index_Bid', 'KMS1 Index_Ask']:
+		new_columns.remove(c)
+	return raw_bid_ask[new_columns]
+
 def readAndCleanData(csv_file_name, open_close):
 	"""
 	For reading in the csv file, and cleaning the data, returning the data with full 
@@ -254,6 +196,9 @@ def readAndCleanData(csv_file_name, open_close):
 	Returns:	pandas DataFrame
 	"""
 	raw_bid_ask = pd.read_csv(csv_file_name, parse_dates=[0], index_col=0)
+	raw_columns = raw_bid_ask.columns.to_list()
+	if 'FXY1 Index' in extractTickerNameFromColumns(raw_columns):
+		raw_bid_ask = mergeColumns(raw_bid_ask.copy())
 	bid_ask_dates = getDataDatesFromFrame(raw_bid_ask)
 	filled_bid_ask_frame = pd.DataFrame(index=raw_bid_ask.index)
 	for col_name in raw_bid_ask.columns:
