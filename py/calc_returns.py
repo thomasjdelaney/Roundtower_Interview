@@ -49,16 +49,6 @@ def addMidColumns(all_clean):
 		all_clean[mid_col_name] = mid_col
 	return all_clean
 
-def getReturnTable(bid_ask_mid):
-	"""
-	For calculating an hourly return table. Return = (mid/mid_one_hour_ago) - 1
-	Arguments:	bid_ask_mid
-	Returns:	pandas DataFrame
-	"""
-	is_hourly_index = bid_ask_mid.index.minute == 0
-	mid_column_names = getMatchedColNames(bid_ask_mid, '_Mid')
-	return bid_ask_mid.loc[is_hourly_index, mid_column_names].pct_change(fill_method=None)
-
 def fitRegressionModel(returns_series, predictors):
 	"""
 	For fitting a regression model for returns to ES1 Index and MS1 Index, or SGD
@@ -182,65 +172,6 @@ def fillRemainingBlanks(special_filled, ticker_to_model):
 		special_filled.update(to_be_filled[mid_col_name])
 	return special_filled[mid_col_names]
 
-def getHourlyReturnsForTicker(ticker, hourly_returns, open_close):
-	"""
-	Get the top 5 most influential tickers for the given dependent ticker.
-	Just use all the variables and L1 regularization (lasso) 
-	Arguments:	ticker, str
-				hourly_returns, pandas DataFrame
-				open_close, pandas DataFrame
-	Returns:	top_five_indep, list of str
-	"""
-	_,_, mid_col_name = getTickerBidAskMidColNames(ticker)
-	open_close_times, num_sessions = getOpenCloseTimesForTicker(open_close, ticker)
-	returns_dates = getDataDatesFromFrame(hourly_returns)
-	open_close_datetimes = getOpenCloseSessionsForDates(returns_dates, open_close_times)
-	ticker_returns = pd.Series(dtype=float)
-	for open_datetime, close_datetime in open_close_datetimes:
-		is_trading = (hourly_returns.index >= open_datetime) & (hourly_returns.index <= close_datetime)
-		session_returns = hourly_returns.loc[is_trading][mid_col_name]
-		is_real_session_return = session_returns.notna()
-		if not is_real_session_return.any():
-			continue # no data/not trading
-		ticker_returns = pd.concat([ticker_returns, session_returns.loc[is_real_session_return]])
-	ticker_returns.name = mid_col_name
-	return ticker_returns
-
-def getTopFiveIndependentVars(dependent_ticker, hourly_returns, open_close, thresh):
-	"""
-	Get the top 5 most influential tickers for the given dependent ticker.
-	If 'thresh' = 0.8, independent variables must have non-null returns at 80% of the dependent tickers
-	non-null return times. This controls the number of independent tickers that are considered.
-	Arguments:	dependent_ticker,  pandas DataFrame
-				hourly_returns, pandas DataFrame
-				open_close, pandas DataFrame
-				thresh, float, between 0 and 1, the threshold number of crossover returns to consider a ticker
-	Returns:	top_five_indep_vars, as measured by absolute value of the coefficient 
-				top_five_coefs, the coefficients themselves
-				r_sq, the score of the model
-	"""
-	dependent_returns = getHourlyReturnsForTicker(dependent_ticker, hourly_returns, open_close)
-	independent_returns = hourly_returns.loc[dependent_returns.index, hourly_returns.columns != dependent_returns.name]
-	num_crossover_returns = independent_returns.notna().sum()
-	crossover_cols = num_crossover_returns[num_crossover_returns > (thresh * dependent_returns.size)].index.to_list()
-	has_all_independent = independent_returns[crossover_cols].notna().all(axis=1)
-	independent_returns_all_valid = independent_returns.loc[has_all_independent, crossover_cols]
-	dependent_returns_with_crossover = dependent_returns[has_all_independent]
-	# regularized linear regression modelling below
-	test_size = dependent_returns_with_crossover.size//4
-	train_size = dependent_returns_with_crossover.size - test_size
-	train_X = independent_returns_all_valid.iloc[:train_size]
-	test_X = independent_returns_all_valid.iloc[train_size:]
-	train_y = dependent_returns_with_crossover.iloc[:train_size]
-	test_y = dependent_returns_with_crossover.iloc[train_size:]
-	regression_model = LassoCV(n_jobs=-1) # TODO: training and test
-	regression_model.fit(train_X, train_y)
-	r_sq = regression_model.score(test_X, test_y)
-	top_five_inds = np.abs(regression_model.coef_).argsort()[-5:]
-	top_five_indep_vars = np.array(crossover_cols)[top_five_inds]
-	top_five_coefs = regression_model.coef_[top_five_inds]
-	return top_five_indep_vars, top_five_coefs, r_sq
-
 def getCoefFrameForTickers(tickers_to_model, hourly_returns, open_close, thresh=0.8):
 	"""
 	Get the top 5 tickers for linear regression modelling of each of the given tickers.
@@ -266,6 +197,10 @@ if not args.debug:
 	print(dt.datetime.now().isoformat() + ' INFO: ' + 'Starting main function...')
 	all_clean = loadCleanBidAsk(csv_dir)
 	bid_ask_mid = addMidColumns(all_clean.copy())
+	if args.save_bid_ask_mid:
+		bid_ask_mid_file_name = os.path.join(csv_dir, 'bid_ask_mid.csv')
+		bid_ask_mid.to_csv(bid_ask_mid_file_name)
+		print(dt.datetime.now().isoformat() + ' INFO: ' + 'Saved: ' + bid_ask_mid_file_name)
 	hourly_returns = getReturnTable(bid_ask_mid)
 	ticker_to_model = getTickerRegressionModels(hourly_returns)
 	print(dt.datetime.now().isoformat() + ' INFO: ' + 'Stage 2 done.')
