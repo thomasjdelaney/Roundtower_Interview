@@ -104,6 +104,33 @@ def takeOffPosition(take_off_record, ticker, position):
 		record_elements = None
 	return record_elements
 
+def executeTradeAndHedge(quote, required_tickers, independent_coefs, current_position, independent_positions, transaction_type):
+	"""
+	For getting the transaction records resulting from a trade and the hedges associated with that trade.
+	Arguments:	quote, the bid/ask record for that time, name is the datetime,
+				required_tickers, [ticker_to_trade  and 5 independent tickers]
+				independent_coefs, array of floats, coefficients, 
+				current_position, float
+				independent positions, array of floats,
+				transaction_type
+	Returns:	a list of lists, each element is a record for the transactions frame
+	"""
+	is_buy = transaction_type == 'b'
+	new_position = current_position + 1 if is_buy else current_position - 1
+	price = quote[ticker_to_trade + '_Ask'] if is_buy else quote[ticker_to_trade + '_Bid']
+	trade_record = [quote.name, required_tickers[0], transaction_type, price, current_position, new_position]
+	hedge_records = []
+	for ticker, coef, position in zip(required_tickers[1:], independent_coefs, independent_positions):
+		if ((coef > 0) & is_buy) | ((coef < 0) & (not is_buy)):
+			new_independent_position = position - np.abs(coef)
+			hedge_record = [quote.name, ticker, 's', quote[ticker + '_Bid'], position, new_independent_position]
+		elif ((coef > 0) & (not is_buy)) | ((coef < 0) & is_buy):
+			new_independent_position = position + np.abs(coef)
+			hedge_record = [quote.name, ticker, 'b', quote[ticker + '_Ask'], position, new_independent_position]
+		else:
+			continue
+		hedge_records.append(hedge_record)
+	return [trade_record] + hedge_records
 
 def simulateDaysTrade(trading_frame, start_trade_datetime, end_trade_datetime, take_off_datetime, ticker_to_trade, 
 		independent_mids, independent_coefs, profit_required):
@@ -127,55 +154,43 @@ def simulateDaysTrade(trading_frame, start_trade_datetime, end_trade_datetime, t
 	current_position = 0
 	independent_positions = np.zeros(5)
 	for q_time, quote in day_frame.iterrows():
+		trade_executed = False
 		fair_price = quote[mid_to_trade] # should we be getting this from some modelled source?
 		max_bid = fair_price * (1 - profit_required) # maximum that we are willing to pay
 		min_ask = fair_price * (1 + profit_required) # minimum at which we are willing to sell
-		if (max_bid >= quote[ask_to_trade]) & (current_position < 3): 
-			new_position = current_position + 1
-			transactions.loc[len(transactions)] = [quote.name, ticker_to_trade, 'b', quote[bid_to_trade], current_position, new_position]
-			for i,t in enumerate(required_tickers[1:]):
-				independent_coef = independent_coefs[i]
-				current_independent_position = independent_positions[i]
-				if independent_coef > 0: # if coef is > 0, correlates with the traded ticker, therefore we take opposing position to hedge
-					new_independent_position = current_independent_position - independent_coef
-					transactions.loc[len(transactions)] = [quote.name, t, 's', quote[ask_cols[i+1]], 
-						current_independent_position, new_independent_position]
-					independent_positions[i] = new_independent_position
-				else: # if coef < 0, anti-correlated with traded ticker, therefore take up same position to hedge
-					new_independent_position = current_independent_position + np.abs(independent_coef)
-					transactions.loc[len(transactions)] = [quote.name, t, 'b', quote[bid_cols[i+1]], 
-						current_independent_position, new_independent_position]
-					independent_positions[i] = new_independent_position
+		if (max_bid >= quote[ask_to_trade]) & (current_position < 3):
+			trade_executed = True
+			transaction_type = 'b'
+			new_transactions = executeTradeAndHedge(quote, required_tickers, independent_coefs, current_position, independent_positions, transaction_type)
+		if (min_ask <= quote[bid_to_trade]) * (current_position > -3):
+			trade_executed = True
+			transaction_type = 's'
+			new_transactions = executeTradeAndHedge(quote, required_tickers, independent_coefs, current_position, independent_positions, transaction_type)
+		if trade_executed:
+			new_position = new_transactions[0][-1]
+			new_independent_positions = np.array([transaction[-1] for transaction in new_transactions[1:]])
 			current_position = new_position
-		if (min_ask <= quote[bid_to_trade]) & (current_position > -3):
-			new_position = current_position - 1
-			transactions.loc[len(transactions)] = [quote.name, ticker_to_trade, 's', quote[ask_to_trade], current_position, new_position]
-			for i,t in enumerate(required_tickers[1:]):
-				independent_coef = independent_coefs[i]
-				current_independent_position = independent_positions[i]
-				if independent_coef > 0: # if coef is > 0, correlates with the traded ticker, therefore we take opposing position to hedge
-					new_independent_position = current_independent_position + independent_coef
-					transactions.loc[len(transactions)] = [quote.name, t, 'b', quote[bid_cols[i+1]], 
-						current_independent_position, new_independent_position]
-					independent_positions[i] = new_independent_position
-				else: # if coef < 0, anti-correlated with traded ticker, therefore take up same position to hedge
-					new_independent_position = current_independent_position - np.abs(independent_coef)
-					transactions.loc[len(transactions)] = [quote.name, t, 's', quote[ask_cols[i+1]], 
-						current_independent_position, new_independent_position]
-					independent_positions[i] = new_independent_position
-			current_position = new_position
+			independent_positions = new_independent_positions
+			for t in new_transactions:
+				transactions.loc[len(transactions)] = t
 	take_off_record = day_frame.loc[take_off_datetime]
 	if transactions.shape[0] > 0:
 		for ticker, position in zip(required_tickers, np.hstack([current_position, independent_positions])):
 			if position > 0:
 				transactions.loc[len(transactions)] = takeOffPosition(take_off_record, ticker, position)
+	return transactions
 
-			# we do a trade, 
-			# and enter the info, 
-			# and update the position
-			# we must also trade
+def chunker(seq, size):
+    return (seq.iloc[pos:pos + size] for pos in range(0, len(seq), size))
 
-
+def addProfitAndLossColumn(days_transactions):
+	"""
+	Add a profit and loss column to the days transactions frame.
+	Arguments:	days_transactions, pandas DataFrame
+	Returns:	pandas DataFrame, with a profit and loss column
+	"""
+	for last, this in chunker(days_transactions, 2):
+		# when should I realise profit or loss?
 
 print(dt.datetime.now().isoformat() + ' INFO: ' + 'Loading in csvs...')
 all_clean = loadCleanBidAsk(csv_dir)
@@ -190,10 +205,7 @@ top_five_indep_mids, top_five_coefs, r_sq = getTopFiveIndependentVars(ticker_to_
 start_trade_time = dt.time(9,0)
 end_trade_time = dt.time(20,0)
 take_off_time = dt.time(1,0) # next day
-profit_required = 0.001 # buy at bid <= fair price * (1 - 0.001)
-						# sell at ask >= fair price * (1 + 0.001)
-# We have to offset each trade by taking the opposite position in the 
-# independent variables. I suppose same rules apply 
+profit_required = 0.001 
 
 bid_ask_all_mids = addFullMidsToAllClean(full_mids, all_clean)
 trade_dates = getDataDatesFromFrame(bid_ask_all_mids)[:-2] # not ideal, revisit
@@ -201,6 +213,8 @@ start_end_off_datetimes = getTradeDateTimes(start_trade_time, end_trade_time, ta
 trading_frame = getTradingFrame(ticker_to_trade, top_five_indep_mids, start_end_off_datetimes, bid_ask_all_mids)
 
 start_trade_datetime, end_trade_datetime, take_off_datetime = start_end_off_datetimes[13]
+days_transactions = simulateDaysTrade(trading_frame, start_trade_datetime, end_trade_datetime, take_off_datetime, ticker_to_trade, 
+		top_five_indep_mids, top_five_coefs, profit_required)
 
 # add the full mids to all clean
 # pick a ticker, KWN+1M BGN Curncy
