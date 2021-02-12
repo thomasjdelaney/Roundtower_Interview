@@ -214,6 +214,8 @@ trade_dates = getDataDatesFromFrame(bid_ask_all_mids)[:-2] # not ideal, revisit
 start_end_off_datetimes = getTradeDateTimes(start_trade_time, end_trade_time, take_off_time, trade_dates)
 trading_frame = getTradingFrame(ticker_to_trade, top_five_indep_mids, start_end_off_datetimes, bid_ask_all_mids)
 
+# Need to get a modelled fair price before we start trying to trade here
+
 start_trade_datetime, end_trade_datetime, take_off_datetime = start_end_off_datetimes[13]
 days_transactions = simulateDaysTrade(trading_frame, start_trade_datetime, end_trade_datetime, take_off_datetime, ticker_to_trade, 
 		top_five_indep_mids, top_five_coefs, profit_required)
