@@ -173,7 +173,7 @@ def simulateDaysTrade(trading_frame, start_trade_datetime, end_trade_datetime, t
 			independent_positions = new_independent_positions
 			for t in new_transactions:
 				transactions.loc[len(transactions)] = t
-	take_off_record = day_frame.loc[take_off_datetime]
+	take_off_record = trading_frame.loc[take_off_datetime]
 	if transactions.shape[0] > 0:
 		for ticker, position in zip(required_tickers, np.hstack([current_position, independent_positions])):
 			if position > 0:
@@ -191,6 +191,8 @@ def addProfitAndLossColumn(days_transactions):
 	"""
 	for last, this in chunker(days_transactions, 2):
 		# when should I realise profit or loss?
+		r=0
+	return r
 
 print(dt.datetime.now().isoformat() + ' INFO: ' + 'Loading in csvs...')
 all_clean = loadCleanBidAsk(csv_dir)
