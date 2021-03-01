@@ -199,10 +199,10 @@ all_clean = loadCleanBidAsk(csv_dir)
 full_mids = loadFullMids(csv_dir)
 open_close = loadOpenCloseTimesCsv(csv_dir)
 bid_ask_mid = loadBidAskMid(csv_dir)
-hourly_returns = getReturnTable(bid_ask_mid)
+hourly_returns = getHourlyReturnTable(bid_ask_mid)
 ticker_to_trade = 'KWN+1M BGN Curncy'
 thresh = 0.8
-top_five_indep_mids, top_five_coefs, r_sq = getTopFiveIndependentVars(ticker_to_trade, hourly_returns, open_close, thresh)
+regression_model, top_five_indep_mids, top_five_coefs, r_sq = getTopFiveIndependentVars(ticker_to_trade, hourly_returns, open_close, thresh)
 
 start_trade_time = dt.time(9,0)
 end_trade_time = dt.time(20,0)
@@ -213,6 +213,7 @@ bid_ask_all_mids = addFullMidsToAllClean(full_mids, all_clean)
 trade_dates = getDataDatesFromFrame(bid_ask_all_mids)[:-2] # not ideal, revisit
 start_end_off_datetimes = getTradeDateTimes(start_trade_time, end_trade_time, take_off_time, trade_dates)
 trading_frame = getTradingFrame(ticker_to_trade, top_five_indep_mids, start_end_off_datetimes, bid_ask_all_mids)
+with_mid_returns = AddMidReturnsCol(trading_frame)
 
 # Need to get a modelled fair price before we start trying to trade here
 

@@ -182,7 +182,7 @@ def getOpenCloseSessionsForDates(bid_ask_dates, open_close_times):
 
 ######################## RETURNS ####################################################
 
-def getReturnTable(bid_ask_mid):
+def getHourlyReturnTable(bid_ask_mid):
 	"""
 	For calculating an hourly return table. Return = (mid/mid_one_hour_ago) - 1
 	Arguments:	bid_ask_mid
@@ -191,6 +191,20 @@ def getReturnTable(bid_ask_mid):
 	is_hourly_index = bid_ask_mid.index.minute == 0
 	mid_column_names = getMatchedColNames(bid_ask_mid, '_Mid')
 	return bid_ask_mid.loc[is_hourly_index, mid_column_names].pct_change(fill_method=None)
+
+def AddMidReturnsCol(trading_frame):
+	"""
+	For adding a column of returns to the given trading frame. Returns are just the 
+	percentage change in the mid price.
+	Arguments:	trading_frame, a frame with some mid columns
+	Returns:	pandas DataFrame, with added returns columns
+	"""
+	mid_column_names = getMatchedColNames(trading_frame, '_Mid')
+	return_column_names = [c.replace('_Mid', '_Ret') for c in mid_column_names]
+	returns_frame = trading_frame.loc[:,mid_column_names].pct_change(fill_method=None)
+	returns_frame.columns = return_column_names
+	with_returns = trading_frame.join(returns_frame, how='left')
+	return with_returns
 
 ##### END OF RETURNS
 
@@ -229,7 +243,8 @@ def getTopFiveIndependentVars(dependent_ticker, hourly_returns, open_close, thre
 				hourly_returns, pandas DataFrame
 				open_close, pandas DataFrame
 				thresh, float, between 0 and 1, the threshold number of crossover returns to consider a ticker
-	Returns:	top_five_indep_vars, as measured by absolute value of the coefficient 
+	Returns:	regression_model, the model itself, useful for predictions
+				top_five_indep_vars, as measured by absolute value of the coefficient 
 				top_five_coefs, the coefficients themselves
 				r_sq, the score of the model
 	"""
@@ -254,5 +269,5 @@ def getTopFiveIndependentVars(dependent_ticker, hourly_returns, open_close, thre
 	top_five_inds = np.abs(regression_model.coef_).argsort()[-5:]
 	top_five_indep_vars = np.array(crossover_cols)[top_five_inds]
 	top_five_coefs = regression_model.coef_[top_five_inds]
-	return top_five_indep_vars, top_five_coefs, r_sq
+	return regression_model, top_five_indep_vars, top_five_coefs, r_sq
 
