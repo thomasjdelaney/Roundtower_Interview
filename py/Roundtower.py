@@ -60,7 +60,7 @@ def extractTickerNameFromColumns(frame_columns):
 	if type(frame_columns) == str:
 		tickers = frame_columns.split('_')[0]
 	elif type(frame_columns) == list:
-		tickers = np.unique([c.split('_')[0]for c in frame_columns])
+		tickers = np.unique([c.split('_')[0]for c in frame_columns]).tolist()
 	else:
 		print(dt.datetime.now().isoformat() + ' ERR: ' + 'Unrecognised type for frame_columns!')
 		tickers = None
@@ -70,19 +70,20 @@ def getTickerBidAskMidColNames(ticker):
 	"""
 	For getting the bid and ask column names from a ticker.
 	Arguments: 	ticker, str
-	Returns:	bid_col_name, str
-				ask_col_name, str
+	Returns:	col_names, includes bid, ask, mid, and returns columns
 	"""
 	if type(ticker) == str:
 		bid_col_name = ticker + '_Bid'
 		ask_col_name = ticker + '_Ask'
 		mid_col_name = ticker + '_Mid'
-		col_names = bid_col_name, ask_col_name, mid_col_name
+		ret_col_name = ticker + '_Ret'
+		col_names = bid_col_name, ask_col_name, mid_col_name, ret_col_name
 	elif type(ticker) == list:
 		bid_col_names = [t + '_Bid' for t in ticker]
 		ask_col_names = [t + '_Ask' for t in ticker]
 		mid_col_names = [t + '_Mid' for t in ticker]
-		col_names = bid_col_names + ask_col_names + mid_col_names
+		ret_col_names = [t + '_Ret' for t in ticker]
+		col_names = bid_col_names + ask_col_names + mid_col_names + ret_col_names
 	elif type(ticker) == np.ndarray:
 		col_names = getTickerBidAskMidColNames(ticker.tolist())
 	else:
@@ -190,21 +191,29 @@ def getHourlyReturnTable(bid_ask_mid):
 	"""
 	is_hourly_index = bid_ask_mid.index.minute == 0
 	mid_column_names = getMatchedColNames(bid_ask_mid, '_Mid')
-	return bid_ask_mid.loc[is_hourly_index, mid_column_names].pct_change(fill_method=None)
+	with_returns = bid_ask_mid.loc[is_hourly_index, mid_column_names].pct_change(fill_method=None)
+	with_returns.columns = [c.replace('_Mid', '_Ret') for c in with_returns.columns]
+	return with_returns
 
-def AddMidReturnsCol(trading_frame):
+def AddMidReturnsCol(trading_frame, valid_start_end_off_datetimes):
 	"""
 	For adding a column of returns to the given trading frame. Returns are just the 
 	percentage change in the mid price.
 	Arguments:	trading_frame, a frame with some mid columns
+				valid_start_end_off_datetimes, list of list of 3 datetimes
 	Returns:	pandas DataFrame, with added returns columns
 	"""
 	mid_column_names = getMatchedColNames(trading_frame, '_Mid')
 	return_column_names = [c.replace('_Mid', '_Ret') for c in mid_column_names]
-	returns_frame = trading_frame.loc[:,mid_column_names].pct_change(fill_method=None)
+	returns_frame = pd.DataFrame()
+	for start, end, off in valid_start_end_off_datetimes:
+		is_trading = (trading_frame.index >= start) & (trading_frame.index <= end)
+		days_trading = trading_frame[is_trading]
+		days_trading = days_trading.loc[:, mid_column_names].pct_change(fill_method=None)
+		returns_frame = pd.concat([returns_frame, days_trading])
 	returns_frame.columns = return_column_names
 	with_returns = trading_frame.join(returns_frame, how='left')
-	return with_returns
+	return with_returns, return_column_names
 
 ##### END OF RETURNS
 
@@ -219,19 +228,19 @@ def getHourlyReturnsForTicker(ticker, hourly_returns, open_close):
 				open_close, pandas DataFrame
 	Returns:	top_five_indep, list of str
 	"""
-	_,_, mid_col_name = getTickerBidAskMidColNames(ticker)
+	_,_, _, ret_col_name = getTickerBidAskMidColNames(ticker)
 	open_close_times, num_sessions = getOpenCloseTimesForTicker(open_close, ticker)
 	returns_dates = getDataDatesFromFrame(hourly_returns)
 	open_close_datetimes = getOpenCloseSessionsForDates(returns_dates, open_close_times)
 	ticker_returns = pd.Series(dtype=float)
 	for open_datetime, close_datetime in open_close_datetimes:
 		is_trading = (hourly_returns.index >= open_datetime) & (hourly_returns.index <= close_datetime)
-		session_returns = hourly_returns.loc[is_trading][mid_col_name]
+		session_returns = hourly_returns.loc[is_trading][ret_col_name]
 		is_real_session_return = session_returns.notna()
 		if not is_real_session_return.any():
 			continue # no data/not trading
 		ticker_returns = pd.concat([ticker_returns, session_returns.loc[is_real_session_return]])
-	ticker_returns.name = mid_col_name
+	ticker_returns.name = ret_col_name
 	return ticker_returns
 
 def getTopFiveIndependentVars(dependent_ticker, hourly_returns, open_close, thresh):
@@ -239,7 +248,7 @@ def getTopFiveIndependentVars(dependent_ticker, hourly_returns, open_close, thre
 	Get the top 5 most influential tickers for the given dependent ticker.
 	If 'thresh' = 0.8, independent variables must have non-null returns at 80% of the dependent tickers
 	non-null return times. This controls the number of independent tickers that are considered.
-	Arguments:	dependent_ticker,  pandas DataFrame
+	Arguments:	dependent_ticker,  string
 				hourly_returns, pandas DataFrame
 				open_close, pandas DataFrame
 				thresh, float, between 0 and 1, the threshold number of crossover returns to consider a ticker
@@ -263,7 +272,7 @@ def getTopFiveIndependentVars(dependent_ticker, hourly_returns, open_close, thre
 	test_X = independent_returns_all_valid.iloc[train_size:]
 	train_y = dependent_returns_with_crossover.iloc[:train_size]
 	test_y = dependent_returns_with_crossover.iloc[train_size:]
-	regression_model = LassoCV(n_jobs=-1) # TODO: training and test
+	regression_model = LassoCV(n_jobs=-1)
 	regression_model.fit(train_X, train_y)
 	r_sq = regression_model.score(test_X, test_y)
 	top_five_inds = np.abs(regression_model.coef_).argsort()[-5:]
@@ -271,3 +280,35 @@ def getTopFiveIndependentVars(dependent_ticker, hourly_returns, open_close, thre
 	top_five_coefs = regression_model.coef_[top_five_inds]
 	return regression_model, top_five_indep_vars, top_five_coefs, r_sq
 
+def getLinearModelFromDepIndep(dependent_ticker, independent_rets, hourly_returns, open_close):
+	"""
+	For getting the linear model of the dependent ticker given the independent tickers, and the hourly returns.
+	This will mostly be used for modelling a ticker using only its top 5 independent tickers.
+	Also makes a shuffled model and measures r squared value for comparison, if desired.
+	Arguments:	dependent_ticker, string
+				independent_rets, list of strings, names of returns columns
+				hourly_returns, pandas DataFrame
+				open_close, pandas DataFrame
+	Returns:	regression_model,
+				r_sq,
+				shuffle_r_sq
+	"""
+	_,_, _, dep_ret_col_name = getTickerBidAskMidColNames(dependent_ticker)
+	all_tickers = [dep_ret_col_name] + independent_rets.tolist()
+	all_returns = hourly_returns.loc[:, all_tickers]
+	has_all_tickers = all_returns.notna().all(axis=1)
+	all_returns = all_returns[has_all_tickers]
+	test_size = all_returns.shape[0]//4
+	train_size = all_returns.shape[0] - test_size
+	train_X = all_returns.iloc[:train_size][independent_rets]
+	test_X = all_returns.iloc[train_size:][independent_rets]
+	train_y = all_returns.iloc[:train_size][dep_ret_col_name]
+	test_y = all_returns.iloc[train_size:][dep_ret_col_name]
+	regression_model = LassoCV(n_jobs=-1)
+	regression_model.fit(train_X, train_y)
+	r_sq = regression_model.score(test_X, test_y)
+	shuffle_train_X = train_X.sample(frac=1)
+	shuffle_model = LassoCV(n_jobs=-1)
+	shuffle_model.fit(shuffle_train_X, train_y)
+	shuffle_r_sq = shuffle_model.score(test_X, test_y)
+	return regression_model, r_sq, shuffle_r_sq

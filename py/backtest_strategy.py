@@ -55,7 +55,11 @@ def getRequiredTradingCols(ticker_to_trade, independent_mids):
 	For getting the column names that we need for trading.
 	Arguments:	ticker_to_trade, str
 				independent_mids, list of str
-	Returns:	list of strings
+	Returns:	required_tickers,
+				required_trading_cols, all the required cols for trading (excluding returns)
+				bid_cols,
+				ask_cols,
+				mid_cols,
 	"""
 	independent_tickers = extractTickerNameFromColumns(independent_mids.tolist())
 	required_tickers = np.hstack([ticker_to_trade, independent_tickers])
@@ -63,19 +67,21 @@ def getRequiredTradingCols(ticker_to_trade, independent_mids):
 	bid_cols = [c for c in required_cols if c.find('_Bid') > -1]
 	ask_cols = [c for c in required_cols if c.find('_Ask') > -1]
 	mid_cols = [c for c in required_cols if c.find('_Mid') > -1]
+	required_cols = bid_cols + ask_cols + mid_cols
 	return required_tickers, required_cols, bid_cols, ask_cols, mid_cols
 
-def getTradingFrame(ticker_to_trade, independent_mids, start_end_off_datetimes, bid_ask_all_mids):
+def getTradingFrame(ticker_to_trade, independent_rets, start_end_off_datetimes, bid_ask_all_mids):
 	"""
 	For getting a data frame that contains the data required for trading nothing else.
 	Arguments:	ticker_to_trade, str
-				independent_mids, list of str
+				independent_rets, list of str
 				start_end_off_datetimes, list of datetimes,
 				bid_ask_all_mids, pandas DataFrame, the data from which we can select
 	Returns:	trading_frame, pandas DataFrame
 	"""
-	required_tickers, required_cols, bid_cols, ask_cols, mid_cols = getRequiredTradingCols(ticker_to_trade, independent_mids)
+	required_tickers, required_cols, bid_cols, ask_cols, mid_cols = getRequiredTradingCols(ticker_to_trade, independent_rets)
 	trading_frame = pd.DataFrame()
+	valid_start_end_off_datetimes = []
 	for start, end, off in start_end_off_datetimes:
 		is_trading_time = (bid_ask_all_mids.index >= start) & (bid_ask_all_mids.index <= end)
 		session_trading_frame = bid_ask_all_mids.loc[is_trading_time,required_cols]
@@ -85,7 +91,8 @@ def getTradingFrame(ticker_to_trade, independent_mids, start_end_off_datetimes, 
 		if session_trading_frame.isnull().all().any(): # if any one column is ALL null
 			continue # we can't trade if the columns are all null
 		trading_frame = pd.concat([trading_frame, session_trading_frame, take_off_record.to_frame().T])
-	return trading_frame
+		valid_start_end_off_datetimes += [[start, end, off]]
+	return trading_frame, valid_start_end_off_datetimes
 
 def takeOffPosition(take_off_record, ticker, position):
 	"""
@@ -96,9 +103,9 @@ def takeOffPosition(take_off_record, ticker, position):
 	Returns:	the list of values for the columns of the transactions table			
 	"""
 	if position > 0:
-		record_elements = [take_off_record.name, ticker, 's', take_off_record[ticker + '_Ask'], current_position, 0]
+		record_elements = [take_off_record.name, ticker, 's', take_off_record[ticker + '_Ask'], position, 0]
 	elif position < 0:
-		record_elements = [take_off_record.name, ticker, 'b', take_off_record[ticker + '_Bid'], current_position, 0]
+		record_elements = [take_off_record.name, ticker, 'b', take_off_record[ticker + '_Bid'], position, 0]
 	else:
 		print(dt.datetime.now().isoformat() + ' ERR: ' + 'Position is 0!')
 		record_elements = None
@@ -132,8 +139,7 @@ def executeTradeAndHedge(quote, required_tickers, independent_coefs, current_pos
 		hedge_records.append(hedge_record)
 	return [trade_record] + hedge_records
 
-def simulateDaysTrade(trading_frame, start_trade_datetime, end_trade_datetime, take_off_datetime, ticker_to_trade, 
-		independent_mids, independent_coefs, profit_required):
+def simulateDaysTrade(trading_frame, start_trade_datetime, end_trade_datetime, take_off_datetime, ticker_to_trade, independent_rets, independent_coefs, profit_required):
 	"""
 	Simulate a days worth of trading, using a leaning strategy.
 	Arguments:	trading_frame, pandas DataFrame,
@@ -146,7 +152,9 @@ def simulateDaysTrade(trading_frame, start_trade_datetime, end_trade_datetime, t
 				profit_required
 	Returns:	a table of trades, with times, bids and asks, position, and take off
 	"""
-	required_tickers, required_cols, bid_cols, ask_cols, mid_cols = getRequiredTradingCols(ticker_to_trade, independent_mids)
+	required_tickers, required_cols, bid_cols, ask_cols, mid_cols = getRequiredTradingCols(ticker_to_trade, independent_rets)
+	fp_to_trade = ticker_to_trade + '_FP'
+	required_cols += [fp_to_trade]
 	mid_to_trade, bid_to_trade, ask_to_trade = mid_cols[0], bid_cols[0], ask_cols[0]
 	is_today = (trading_frame.index >= start_trade_datetime) & (trading_frame.index <= end_trade_datetime)
 	day_frame = trading_frame.loc[is_today, required_cols]
@@ -155,7 +163,9 @@ def simulateDaysTrade(trading_frame, start_trade_datetime, end_trade_datetime, t
 	independent_positions = np.zeros(5)
 	for q_time, quote in day_frame.iterrows():
 		trade_executed = False
-		fair_price = quote[mid_to_trade] # should we be getting this from some modelled source?
+		fair_price = quote[fp_to_trade]
+		if np.isnan(fair_price):
+			continue
 		max_bid = fair_price * (1 - profit_required) # maximum that we are willing to pay
 		min_ask = fair_price * (1 + profit_required) # minimum at which we are willing to sell
 		if (max_bid >= quote[ask_to_trade]) & (current_position < 3):
@@ -194,32 +204,56 @@ def addProfitAndLossColumn(days_transactions):
 		r=0
 	return r
 
+def getFairPriceForTicker(ticker_to_trade, valid_start_end_off_datetimes, top_five_model, top_five_indep_rets, trading_frame):
+	"""
+	For calculating the fair price of the given ticker according to the linear model using the 
+	top five most correlated independent variables. 
+	Arguments:	ticker_to_trade, str, 
+				valid_start_end_off_datetimes, valid trading days start, end, and off times
+				top_five_model, sklearn linear model
+				top_five_indep_rets, numpy array str
+				trading_frame, pandas DataFrame
+	Returns:	fair_prices_series, pandas Series, labelled with _FP after ticker
+	"""
+	mid_to_trade = ticker_to_trade + '_Mid'
+	with_mid_returns, return_column_names = AddMidReturnsCol(trading_frame, valid_start_end_off_datetimes)
+	is_valid_returns = with_mid_returns.loc[:, return_column_names].notna().all(axis=1)
+	most_correlated_valid_returns = with_mid_returns.loc[is_valid_returns, top_five_indep_rets]
+	modelled_returns = top_five_model.predict(most_correlated_valid_returns)
+	one_minute_previous_index = most_correlated_valid_returns.index - dt.timedelta(minutes=1)
+	fair_prices = with_mid_returns.loc[one_minute_previous_index, mid_to_trade] * (1 + modelled_returns)
+	fair_prices_series = pd.Series(data=fair_prices, index=most_correlated_valid_returns.index, name=ticker_to_trade + '_FP')
+	return fair_prices_series
+
 print(dt.datetime.now().isoformat() + ' INFO: ' + 'Loading in csvs...')
 all_clean = loadCleanBidAsk(csv_dir)
 full_mids = loadFullMids(csv_dir)
 open_close = loadOpenCloseTimesCsv(csv_dir)
 bid_ask_mid = loadBidAskMid(csv_dir)
+bid_ask_all_mids = addFullMidsToAllClean(full_mids, all_clean)
 hourly_returns = getHourlyReturnTable(bid_ask_mid)
 ticker_to_trade = 'KWN+1M BGN Curncy'
+print(dt.datetime.now().isoformat() + ' INFO: ' + 'Finding the most influential independent variables...')
 thresh = 0.8
-regression_model, top_five_indep_mids, top_five_coefs, r_sq = getTopFiveIndependentVars(ticker_to_trade, hourly_returns, open_close, thresh)
-
+regression_model, top_five_indep_rets, top_five_coefs, r_sq = getTopFiveIndependentVars(ticker_to_trade, hourly_returns, open_close, thresh)
+top_five_model, r_sq, shuffle_r_sq = getLinearModelFromDepIndep(ticker_to_trade, top_five_indep_rets, hourly_returns, open_close)
+print(dt.datetime.now().isoformat() + ' INFO: ' + 'Getting trading frame and fair prices...')
 start_trade_time = dt.time(9,0)
 end_trade_time = dt.time(20,0)
 take_off_time = dt.time(1,0) # next day
-profit_required = 0.001 
-
-bid_ask_all_mids = addFullMidsToAllClean(full_mids, all_clean)
 trade_dates = getDataDatesFromFrame(bid_ask_all_mids)[:-2] # not ideal, revisit
 start_end_off_datetimes = getTradeDateTimes(start_trade_time, end_trade_time, take_off_time, trade_dates)
-trading_frame = getTradingFrame(ticker_to_trade, top_five_indep_mids, start_end_off_datetimes, bid_ask_all_mids)
-with_mid_returns = AddMidReturnsCol(trading_frame)
+trading_frame, valid_start_end_off_datetimes = getTradingFrame(ticker_to_trade, top_five_indep_rets, start_end_off_datetimes, bid_ask_all_mids)
+fair_price_series = getFairPriceForTicker(ticker_to_trade, valid_start_end_off_datetimes, top_five_model, top_five_indep_rets, trading_frame)
+trading_frame = trading_frame.join(fair_price_series)
+print(dt.datetime.now().isoformat() + ' INFO: ' + 'Simulating trading days...')
+profit_required = 0.001 
+transactions = pd.DataFrame()
+for start_trade_datetime, end_trade_datetime, take_off_datetime in valid_start_end_off_datetimes:
+	days_transactions = simulateDaysTrade(trading_frame, start_trade_datetime, end_trade_datetime, take_off_datetime, ticker_to_trade, top_five_indep_rets, top_five_coefs, profit_required)
+	transactions = pd.concat([transactions, days_transactions])
 
-# Need to get a modelled fair price before we start trying to trade here
-
-start_trade_datetime, end_trade_datetime, take_off_datetime = start_end_off_datetimes[13]
-days_transactions = simulateDaysTrade(trading_frame, start_trade_datetime, end_trade_datetime, take_off_datetime, ticker_to_trade, 
-		top_five_indep_mids, top_five_coefs, profit_required)
+start_trade_datetime, end_trade_datetime, take_off_datetime = valid_start_end_off_datetimes[3]
 
 # add the full mids to all clean
 # pick a ticker, KWN+1M BGN Curncy

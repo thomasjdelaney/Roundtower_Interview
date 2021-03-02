@@ -12,6 +12,7 @@ from sklearn.linear_model import LinearRegression, LassoCV
 
 parser = argparse.ArgumentParser(description='For making a "returns" table.')
 parser.add_argument('-f', '--fill_all', help='Flag for filling all the columns. This can take up to 15 minutes', action='store_true', default=False)
+parser.add_argument('-s', '--save_bid_ask_mid', help='Flag for saving the bid_ask_mid table, or not', action='store_true', default=False)
 parser.add_argument('-d', '--debug', help='Enter debug mode.', action='store_true', default=False)
 args = parser.parse_args()
 
@@ -184,7 +185,7 @@ def getCoefFrameForTickers(tickers_to_model, hourly_returns, open_close, thresh=
 	"""
 	coef_frame = pd.DataFrame()
 	for ticker in tickers_to_model:
-		top_five_indep_vars, top_five_coefs, r_sq = getTopFiveIndependentVars(ticker, hourly_returns, open_close, thresh)
+		regression_model, top_five_indep_vars, top_five_coefs, r_sq = getTopFiveIndependentVars(ticker, hourly_returns, open_close, thresh)
 		ticker_model_frame = pd.DataFrame(columns=['independent_vars','coefs'], data=np.vstack([top_five_indep_vars, top_five_coefs]).T)
 		ticker_model_frame['dependent_var'] = ticker
 		ticker_model_frame['r_squared'] = r_sq
@@ -201,7 +202,7 @@ if not args.debug:
 		bid_ask_mid_file_name = os.path.join(csv_dir, 'bid_ask_mid.csv')
 		bid_ask_mid.to_csv(bid_ask_mid_file_name)
 		print(dt.datetime.now().isoformat() + ' INFO: ' + 'Saved: ' + bid_ask_mid_file_name)
-	hourly_returns = getReturnTable(bid_ask_mid)
+	hourly_returns = getHourlyReturnTable(bid_ask_mid)
 	ticker_to_model = getTickerRegressionModels(hourly_returns)
 	print(dt.datetime.now().isoformat() + ' INFO: ' + 'Stage 2 done.')
 	special_filled = fillSpecialColumns(bid_ask_mid.copy())
