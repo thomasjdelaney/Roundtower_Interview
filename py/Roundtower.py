@@ -276,7 +276,7 @@ def getHourlyReturnsForTicker(ticker, hourly_returns, open_close):
 
 def getTopIndependentVars(dependent_ticker, hourly_returns, open_close, thresh, num_indep_vars=5):
 	"""
-	Get the top 5 most influential tickers for the given dependent ticker.
+	Get the most influential tickers for the given dependent ticker.
 	If 'thresh' = 0.8, independent variables must have non-null returns at 80% of the dependent tickers
 	non-null return times. This controls the number of independent tickers that are considered.
 	Arguments:	dependent_ticker,  string
@@ -315,7 +315,7 @@ def getTopIndependentVars(dependent_ticker, hourly_returns, open_close, thresh, 
 def getLinearModelFromDepIndep(dependent_ticker, independent_rets, hourly_returns, open_close):
 	"""
 	For getting the linear model of the dependent ticker given the independent tickers, and the hourly returns.
-	This will mostly be used for modelling a ticker using only its top 5 independent tickers.
+	This will mostly be used for modelling a ticker using only its top independent tickers.
 	Also makes a shuffled model and measures r squared value for comparison, if desired.
 	Arguments:	dependent_ticker, string
 				independent_rets, list of strings, names of returns columns
