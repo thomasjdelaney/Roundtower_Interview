@@ -1,6 +1,6 @@
 #### Instructions
 
-I cannot get data earlier than 1st June atm.
+We cannot get data earlier than 1st June atm.
 
 We will break the project into 4 parts.
 
@@ -8,7 +8,7 @@ We will break the project into 4 parts.
     - I have given you the data for every day
     - If there is no data on a day then this day is on holiday
     - You need to use average of bid and ask to get mid
-    - You will need to use ffill for missing data intra day when a future or currency doesn’t trade much – but check hours of trading below as cannot use outside of those hours & for holidays & maybe if lots of missing data beware…
+    - You will need to use ffill for missing data intra day when a future or currency doesn’t trade much – but check hours of trading in csv/open_close.csv as cannot use outside of those hours & for holidays & maybe if lots of missing data beware…
     - Expirations – for futures, they expire every 1 or 3 months – we can look into rolling futures at a later stage (rolling is when a future expires and we need to use the next future)
     - Currency trade from 1am until 9pm
     - FXY1 index is the same future as the KMS1 Index so you need to combine these futures
@@ -30,7 +30,7 @@ We will break the project into 4 parts.
     - Assume need 0.1% (aka 10bps) profit, e.g. if fair value at 12pm is 1000, then we want to pay (aka bid) 999.9 (1000*.999) or sell (aka offer) 1000.1 (1000*1.001)
     - I have attached an example & more information below regarding leaning
     - Do up to a maximum 3 trades until can get out of position
-    - Lets assume we trade $1m for each trade for now (so max position of long or short $3m)
+    - Lets assume we trade \$1m for each trade for now (so max position of long or short $3m)
     - Lets have a call about this once you have read it all so you can ask lots of questions
     - Parameter optimation (to be done at a later date after we are happy with the first 3 parts)
     - Amend all parameters to maximise p&l -  E.g.
@@ -87,7 +87,7 @@ We will add rolls at a later date for equity index futures.
 #### Leaning
 I have attached the example for leaning.
 Everytime you trade you need to hedge with the indept vars.
-e.g. if buy $1m kwn, you sell $500k CNH, sell $250k NTN, etc using betas from indept vars.
+e.g. if buy \$1m kwn, you sell \$500k CNH, sell \$250k NTN, etc using betas from indept vars.
 Also, worth rerunning lasso & limiting to 3 indept vars & hedge with these 3 instead of the 5 you use to model kwn.
 This can be 2nd iteration.
 

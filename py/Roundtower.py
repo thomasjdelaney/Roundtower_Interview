@@ -9,6 +9,8 @@ from sklearn.linear_model import LassoCV
 
 ################## LOADING FUNCTIONS #########################
 
+## See notes_on_csv_files.md for further information on csv files in the csv/ dir.
+
 def loadOpenCloseTimesCsv(csv_dir):
 	"""
 	For loading in the csv file that contains opening and closing times info.
@@ -47,26 +49,55 @@ def loadBidAskMid(csv_dir):
 	"""
 	return pd.read_csv(os.path.join(csv_dir, 'bid_ask_mid.csv'), parse_dates=[0], index_col=0)
 
+def addFullMidsToAllClean(full_mids, all_clean):
+	"""
+	For merging the full_mids, and all_clean tables.
+	Arguments: 	full_mids, pandas DataFrame, contains only mid prices 
+					for all ticks (except for a few at the start)
+				all_clean, pandas DataFrame, clean asks and bids
+	Returns:	bid_ask_all_mids, pandas DataFrame
+	"""
+	return pd.merge(full_mids, all_clean, left_index=True, right_index=True, how='inner')
+
+def divideDataForBacktesting(bid_ask_mid, hist_to_backtest_ratio=6):
+	"""
+	For dividing the data into 'historical' and 'backtesting'. The historical data will be used for training models.
+	The backtesting data is used for backtesting.
+	Arguments:	bid_ask_mid,
+	Returns:	historical_data, pandas Dataframe
+				backtesting_data, pandas Dataframe
+	"""
+	unique_dates = np.unique(bid_ask_mid.index.date)
+	num_dates = unique_dates.size
+	num_historical_dates = int(hist_to_backtest_ratio * num_dates//(hist_to_backtest_ratio + 1))
+	num_backtesting_dates = num_dates - num_historical_dates
+	historical_dates = unique_dates[:num_historical_dates]
+	backtesting_dates = unique_dates[num_historical_dates:]
+	historical_data = bid_ask_mid[np.isin(bid_ask_mid.index.date, historical_dates)]
+	backtesting_data = bid_ask_mid[np.isin(bid_ask_mid.index.date, backtesting_dates)]
+	return historical_data, backtesting_data
+
 #### END OF LOADING FUNCTIONS
 
 ######################### TICKER & COLUMN NAMES #################################
 
 def extractTickerNameFromColumns(frame_columns):
 	"""
-	For extracting the names of the ticker for which we have data from the column names.
+	For extracting the names of the tickers for which we have data from the column names.
+	Note that the tickers returned may not be a unique list. This is to avoid reordering
 	Arguments:	frame_columns, list of str, frame.columns, or single str
 	Returns:	numpy array of strings, or single str
 	"""
 	if type(frame_columns) == str:
 		tickers = frame_columns.split('_')[0]
 	elif type(frame_columns) == list:
-		tickers = np.unique([c.split('_')[0]for c in frame_columns]).tolist()
+		tickers = [c.split('_')[0]for c in frame_columns]
 	else:
 		print(dt.datetime.now().isoformat() + ' ERR: ' + 'Unrecognised type for frame_columns!')
 		tickers = None
 	return tickers
 
-def getTickerBidAskMidColNames(ticker):
+def getTickerBidAskMidRetColNames(ticker):
 	"""
 	For getting the bid and ask column names from a ticker.
 	Arguments: 	ticker, str
@@ -85,7 +116,7 @@ def getTickerBidAskMidColNames(ticker):
 		ret_col_names = [t + '_Ret' for t in ticker]
 		col_names = bid_col_names + ask_col_names + mid_col_names + ret_col_names
 	elif type(ticker) == np.ndarray:
-		col_names = getTickerBidAskMidColNames(ticker.tolist())
+		col_names = getTickerBidAskMidRetColNames(ticker.tolist())
 	else:
 		print(dt.datetime.now().isoformat() + ' ERR: ' + 'Unrecognised ticker type.')
 		col_names = [None]
@@ -228,7 +259,7 @@ def getHourlyReturnsForTicker(ticker, hourly_returns, open_close):
 				open_close, pandas DataFrame
 	Returns:	top_five_indep, list of str
 	"""
-	_,_, _, ret_col_name = getTickerBidAskMidColNames(ticker)
+	_,_, _, ret_col_name = getTickerBidAskMidRetColNames(ticker)
 	open_close_times, num_sessions = getOpenCloseTimesForTicker(open_close, ticker)
 	returns_dates = getDataDatesFromFrame(hourly_returns)
 	open_close_datetimes = getOpenCloseSessionsForDates(returns_dates, open_close_times)
@@ -243,7 +274,7 @@ def getHourlyReturnsForTicker(ticker, hourly_returns, open_close):
 	ticker_returns.name = ret_col_name
 	return ticker_returns
 
-def getTopFiveIndependentVars(dependent_ticker, hourly_returns, open_close, thresh):
+def getTopIndependentVars(dependent_ticker, hourly_returns, open_close, thresh, num_indep_vars=5):
 	"""
 	Get the top 5 most influential tickers for the given dependent ticker.
 	If 'thresh' = 0.8, independent variables must have non-null returns at 80% of the dependent tickers
@@ -252,6 +283,7 @@ def getTopFiveIndependentVars(dependent_ticker, hourly_returns, open_close, thre
 				hourly_returns, pandas DataFrame
 				open_close, pandas DataFrame
 				thresh, float, between 0 and 1, the threshold number of crossover returns to consider a ticker
+				num_indep_vars, int, number of independent variables to return
 	Returns:	regression_model, the model itself, useful for predictions
 				top_five_indep_vars, as measured by absolute value of the coefficient 
 				top_five_coefs, the coefficients themselves
@@ -275,10 +307,10 @@ def getTopFiveIndependentVars(dependent_ticker, hourly_returns, open_close, thre
 	regression_model = LassoCV(n_jobs=-1)
 	regression_model.fit(train_X, train_y)
 	r_sq = regression_model.score(test_X, test_y)
-	top_five_inds = np.abs(regression_model.coef_).argsort()[-5:]
-	top_five_indep_vars = np.array(crossover_cols)[top_five_inds]
-	top_five_coefs = regression_model.coef_[top_five_inds]
-	return regression_model, top_five_indep_vars, top_five_coefs, r_sq
+	top_inds = np.abs(regression_model.coef_).argsort()[-num_indep_vars:]
+	top_indep_vars = np.array(crossover_cols)[top_inds]
+	top_coefs = regression_model.coef_[top_inds]
+	return regression_model, top_indep_vars, top_coefs, r_sq
 
 def getLinearModelFromDepIndep(dependent_ticker, independent_rets, hourly_returns, open_close):
 	"""
@@ -293,7 +325,7 @@ def getLinearModelFromDepIndep(dependent_ticker, independent_rets, hourly_return
 				r_sq,
 				shuffle_r_sq
 	"""
-	_,_, _, dep_ret_col_name = getTickerBidAskMidColNames(dependent_ticker)
+	_,_, _, dep_ret_col_name = getTickerBidAskMidRetColNames(dependent_ticker)
 	all_tickers = [dep_ret_col_name] + independent_rets.tolist()
 	all_returns = hourly_returns.loc[:, all_tickers]
 	has_all_tickers = all_returns.notna().all(axis=1)

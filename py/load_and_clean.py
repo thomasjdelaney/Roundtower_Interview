@@ -137,7 +137,8 @@ def nullBidAskSeries(bid_ask_series, close_datetime, open_datetime):
 def cleanTickerBidsAsks(bid_ask_series, bid_ask_dates, open_close_times):
 	"""
 	For cleaning the up the bid and ask data. We want to fill forward bids and asks during a trading session.
-	But we don't to insert data on days where there is none (holidays, weekends).
+	But we don't want to insert data on days where there is none (holidays, weekends).
+	We also want to null out any prices that exist outside of open hours.
 	We don't want to insert bids or asks before the first bid or quote of the session either.
 	Profile this code because it may be repeated often.
 	Arguments:	bid_ask_series, pandas Series
