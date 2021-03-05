@@ -131,6 +131,27 @@ def getMatchedColNames(frame, pattern):
 	"""
 	return [c for c in frame.columns if -1 < c.find(pattern)]
 
+def getRequiredTradingCols(ticker_to_trade, indep_rets):
+	"""
+	For getting the column names and tickers that we need for trading.
+	Arguments:	ticker_to_trade, str, 
+				indep_rets, list of str, the independent variables for modelling the ticker to trade
+	Returns:	required_tickers,
+				required_trading_cols, all the required cols for trading (excluding returns)
+				bid_cols,
+				ask_cols,
+				mid_cols,
+	TODO: We're returning the same thing twice here. Look at the use cases.
+	"""
+	indep_tickers = extractTickerNameFromColumns(indep_rets.tolist())
+	required_tickers = np.hstack([ticker_to_trade, indep_tickers])
+	required_cols = getTickerBidAskMidRetColNames(required_tickers)
+	bid_cols = [c for c in required_cols if c.find('_Bid') > -1]
+	ask_cols = [c for c in required_cols if c.find('_Ask') > -1]
+	mid_cols = [c for c in required_cols if c.find('_Mid') > -1]
+	required_cols = bid_cols + ask_cols + mid_cols
+	return required_tickers, required_cols, bid_cols, ask_cols, mid_cols
+
 ###### END OF TICKER & COLUMN NAMES
 
 ######################### OPEN & CLOSE TIMES ##########################
@@ -344,3 +365,81 @@ def getLinearModelFromDepIndep(dependent_ticker, independent_rets, hourly_return
 	shuffle_model.fit(shuffle_train_X, train_y)
 	shuffle_r_sq = shuffle_model.score(test_X, test_y)
 	return regression_model, r_sq, shuffle_r_sq
+
+############### BACKTESTING STRATEGY ####################################################
+
+def getOpenTakeOffTradingFrame(bid_ask_mid, ticker_to_trade, indep_rets, start_trade_time, end_trade_time, take_off_time):
+	"""
+	For getting a dataframe containing the mid prices of the ticker to trade and the independent variables during the 
+	open times of the ticker to trade, and the take off times of the ticker to trade. Also returns the start, end, and
+	take off datetimes for the ticker to trade on the days for which we have valid data.
+	A day has valid data if it has some quotes during the open times and it has a valid take off time quote.
+	Arguments:	bid_ask_mid, pandas DataFrame, this could also be the full_mids table with bids and asks.
+				ticker_to_trade, string,
+				indep_rets, list of strings,
+				start_trade_time, datetime time,
+				end_trade_time, datetime time,
+				take_off_time, datetime time,
+	Returns:	trading_frame, contains data for times when the ticker_to_trade is open, and take off times
+				start_end_off_datetimes, list of lists of three items [start of trading, end, take off time]
+					one three item list per valid trading day
+	"""
+	trade_dates = np.unique(bid_ask_mid.index.date)
+	start_end_off_datetimes = []
+	required_tickers, required_cols, bid_cols, ask_cols, mid_cols = getRequiredTradingCols(ticker_to_trade, indep_rets)
+	trading_frame = pd.DataFrame()
+	for date in trade_dates:
+		start_trade_datetime = dt.datetime.combine(date, start_trade_time)
+		end_trade_datetime = dt.datetime.combine(date, end_trade_time)
+		next_date = date + dt.timedelta(days=1)
+		take_off_datetime = dt.datetime.combine(next_date, take_off_time)
+		if not take_off_datetime in bid_ask_mid.index:
+			continue # if we don't have a take off time quote, we can't trade
+		take_off_quote = bid_ask_mid.loc[take_off_datetime, required_cols]
+		if take_off_quote.isna().any():
+			continue # If we don't have a valid quote at the take off time, we cannot trade that day
+		is_trading_time = (bid_ask_mid.index >= start_trade_datetime) & (bid_ask_mid.index <= end_trade_datetime)
+		if not is_trading_time.any():
+			continue # we don't have data for this date
+		session_trading_frame = bid_ask_mid.loc[is_trading_time, required_cols]
+		if not session_trading_frame.notna().all(axis=1).any():
+			continue # if we don't have any valid quotes, we cannot trade
+		trading_frame = pd.concat([trading_frame, session_trading_frame, take_off_quote.to_frame().T])
+		start_end_off_datetimes += [[start_trade_datetime, end_trade_datetime, take_off_datetime]]
+	return trading_frame, start_end_off_datetimes
+
+def getModelledPriceForTicker(fair_price_dep, quoted_price_indep, fair_price_indep, returns_model):
+	"""
+	For calculating the modelled price of a dependent variable given a model with independent variables, their quoted and 
+	fair prices, and the dependent fair price. (NB: Which prices are 'fair' is decided by market knowledge, consult Dan and Stephen) 
+	TODO: This function needs unit tests
+	Arguments:	fair_price_dep, the reference or 'fair' price for the dependent variable
+				quoted_price_indep, the current or quoted prices of the independent variables
+				fair_price_indep, the reference or fair prices for the independent variables
+				returns_model, the linear model that gives the return of the dependent variable given the returns of the independents
+	Returns:	modelled price of dependent variable
+	"""
+	indep_returns = (quoted_price_indep / fair_price_indep) - 1
+	modelled_return = returns_model.predict([indep_returns])[0]
+	modelled_price = fair_price_dep * (1 + modelled_return)
+	return modelled_price
+
+def getMaxBidMinAskLean(modelled_price, profit_required, lean, position):
+	"""
+	For getting the maximum price we are willing to pay (max bid) and minimum price for which we are willing to sell (min ask)
+	given the modelled/fair price, a 'lean' amount (lean as in tilt, not lean as in not fat), and our current position.
+	'Leaning' is integrating the market price into our model of the fair price by adjusting our modelled price scaled by our position.
+	See README.md for more details on leaning.
+	Arguments:	modelled_price, float
+				profit_required, float, quoted in % so 10bps should be entered as 0.001 (consider changing this)
+				lean, float, also quoted in %
+				position, our position in the ticker we are trading.
+	Returns:	max_bid, the maximum price we are willing to pay
+				min_ask, the minimum price for which we are willing to sell
+	"""
+	max_bid_no_lean = modelled_price - modelled_price * profit_required # maximum that we are willing to pay
+	min_ask_no_lean = modelled_price + modelled_price * profit_required # minimum at which we are willing to sell
+	lean_amount = modelled_price * lean
+	max_bid_with_lean = max_bid_no_lean - lean_amount * position
+	min_ask_with_lean = min_ask_no_lean - lean_amount * position
+	return max_bid_with_lean, min_ask_with_lean

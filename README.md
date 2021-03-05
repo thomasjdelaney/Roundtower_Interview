@@ -85,11 +85,23 @@ You should now have all cells filled in
 We will add rolls at a later date for equity index futures.
 
 #### Leaning
-I have attached the example for leaning.
+
+Leaning is a method of integrating the market price into our model of the fair price. We decide on a percentage to 'lean' according to our position. This amount is quoted in bps, similar to our required profit or 'edge'. If we have a positive position in some ticker, we 'lean down', i.e. we lower our modelled price. If we have negative position in some ticker we 'lean up', i.e. we raise our modelled price. In practice, we just change our maximum bidding value, and our minimum asking value either down for 'leaning down' or up for 'leaning up'. In the current implementation, if we have no position then we do not lean. This means that the information we might get from the current market price is disregarded.
+
+- **IDEA** It might be good to lean even when we do not have a position in the market.
+
+Leaning also has the effect of maximising our P&L according to Dan. I should ask Dan more about this, as I do not fully understand why this is the case. Perhaps if we do not lean, we are unlikely to enter the market because our prices are too low or too high.
+
+There is an example attached for leaning in the xlsx directory.
+
+### Hedging
+
 Everytime you trade you need to hedge with the indept vars.
 e.g. if buy \$1m kwn, you sell \$500k CNH, sell \$250k NTN, etc using betas from indept vars.
 Also, worth rerunning lasso & limiting to 3 indept vars & hedge with these 3 instead of the 5 you use to model kwn.
 This can be 2nd iteration.
+
+
 
 #### My own thoughts
 * Clean product by product?
