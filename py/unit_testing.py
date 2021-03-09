@@ -23,7 +23,7 @@ sys.path.append(py_dir)
 from Roundtower import *
 
 #### getMaxBidMinAsk, this function implements our 'leaning' ###
-# getMaxBidMinAsk(modelled_price, profit_required, lean, position)
+# getMaxBidMinAsk(modelled_price, edge_required, lean, position)
 # leaning as position changes
 try:
     assert getMaxBidMinAsk(1000, 0.001, 0.001, 3) == (996, 998)

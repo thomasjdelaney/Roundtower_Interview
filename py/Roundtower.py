@@ -144,7 +144,7 @@ def getRequiredTradingCols(ticker_to_trade, indep_rets):
 	TODO: We're returning the same thing twice here. Look at the use cases.
 	"""
 	indep_tickers = extractTickerNameFromColumns(indep_rets.tolist())
-	required_tickers = np.hstack([ticker_to_trade, indep_tickers])
+	required_tickers = [ticker_to_trade] + indep_tickers
 	required_cols = getTickerBidAskMidRetColNames(required_tickers)
 	bid_cols = [c for c in required_cols if c.find('_Bid') > -1]
 	ask_cols = [c for c in required_cols if c.find('_Ask') > -1]
@@ -325,7 +325,7 @@ def getTopIndependentVars(dependent_ticker, hourly_returns, open_close, thresh, 
 	test_X = independent_returns_all_valid.iloc[train_size:]
 	train_y = dependent_returns_with_crossover.iloc[:train_size]
 	test_y = dependent_returns_with_crossover.iloc[train_size:]
-	regression_model = LassoCV(n_jobs=-1)
+	regression_model = LassoCV(n_jobs=-1, fit_intercept=False)
 	regression_model.fit(train_X, train_y)
 	r_sq = regression_model.score(test_X, test_y)
 	top_inds = np.abs(regression_model.coef_).argsort()[-num_indep_vars:]
@@ -357,11 +357,11 @@ def getLinearModelFromDepIndep(dependent_ticker, independent_rets, hourly_return
 	test_X = all_returns.iloc[train_size:][independent_rets]
 	train_y = all_returns.iloc[:train_size][dep_ret_col_name]
 	test_y = all_returns.iloc[train_size:][dep_ret_col_name]
-	regression_model = LassoCV(n_jobs=-1)
+	regression_model = LassoCV(n_jobs=-1, fit_intercept=False)
 	regression_model.fit(train_X, train_y)
 	r_sq = regression_model.score(test_X, test_y)
 	shuffle_train_X = train_X.sample(frac=1)
-	shuffle_model = LassoCV(n_jobs=-1)
+	shuffle_model = LassoCV(n_jobs=-1, fit_intercept=False)
 	shuffle_model.fit(shuffle_train_X, train_y)
 	shuffle_r_sq = shuffle_model.score(test_X, test_y)
 	return regression_model, r_sq, shuffle_r_sq
@@ -424,21 +424,21 @@ def getModelledPriceForTicker(fair_price_dep, quoted_price_indep, fair_price_ind
 	modelled_price = fair_price_dep * (1 + modelled_return)
 	return modelled_price
 
-def getMaxBidMinAskLean(modelled_price, profit_required, lean, position):
+def getMaxBidMinAskLean(modelled_price, edge_required, lean, position):
 	"""
 	For getting the maximum price we are willing to pay (max bid) and minimum price for which we are willing to sell (min ask)
 	given the modelled/fair price, a 'lean' amount (lean as in tilt, not lean as in not fat), and our current position.
 	'Leaning' is integrating the market price into our model of the fair price by adjusting our modelled price scaled by our position.
 	See README.md for more details on leaning.
 	Arguments:	modelled_price, float
-				profit_required, float, quoted in % so 10bps should be entered as 0.001 (consider changing this)
+				edge_required, float, quoted in % so 10bps should be entered as 0.001 (consider changing this)
 				lean, float, also quoted in %
 				position, our position in the ticker we are trading.
 	Returns:	max_bid, the maximum price we are willing to pay
 				min_ask, the minimum price for which we are willing to sell
 	"""
-	max_bid_no_lean = modelled_price - modelled_price * profit_required # maximum that we are willing to pay
-	min_ask_no_lean = modelled_price + modelled_price * profit_required # minimum at which we are willing to sell
+	max_bid_no_lean = modelled_price - modelled_price * edge_required # maximum that we are willing to pay
+	min_ask_no_lean = modelled_price + modelled_price * edge_required # minimum at which we are willing to sell
 	lean_amount = modelled_price * lean
 	max_bid_with_lean = max_bid_no_lean - lean_amount * position
 	min_ask_with_lean = min_ask_no_lean - lean_amount * position
