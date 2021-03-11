@@ -7,6 +7,11 @@ import numpy as np
 import pandas as pd
 from sklearn.linear_model import LassoCV
 
+################### CONSTANTS #################################
+
+special_mid_names = ['ES1 Index_Ret', 'MES1 Index_Ret', 'SGD BGN Curncy_Ret']
+special_ticker_names = ['ES1 Index', 'MES1 Index', 'SGD BGN Curncy']
+
 ################## LOADING FUNCTIONS #########################
 
 ## See notes_on_csv_files.md for further information on csv files in the csv/ dir.
@@ -76,6 +81,23 @@ def divideDataForBacktesting(bid_ask_mid, hist_to_backtest_ratio=6):
 	historical_data = bid_ask_mid[np.isin(bid_ask_mid.index.date, historical_dates)]
 	backtesting_data = bid_ask_mid[np.isin(bid_ask_mid.index.date, backtesting_dates)]
 	return historical_data, backtesting_data
+
+def fillWithSpecialModelExcludeDependent(csv_dir, historical_data, ticker_to_trade):
+	"""
+	For loading the fully filled data except for the data for the ticker to trade.
+	Arguments:	csv_dir, the csv directory
+				historical_data, pandas DataFrame,
+				ticker_to_trade, str
+	Returns:	fill_historical_data, pandas DataFrame
+	"""
+	print(dt.datetime.now().isoformat() + ' INFO: ' + 'Filling data...')
+	mid_col_name = ticker_to_trade + '_Mid'
+	full_mids = loadFullMids(csv_dir)
+	all_clean = loadCleanBidAsk(csv_dir)
+	bid_ask_full_mids = addFullMidsToAllClean(full_mids, all_clean)
+	historical_bid_ask_full_mids = bid_ask_full_mids.loc[historical_data.index,:].copy()
+	historical_bid_ask_full_mids.loc[:,mid_col_name] = historical_data.loc[:,mid_col_name]
+	return historical_bid_ask_full_mids
 
 #### END OF LOADING FUNCTIONS
 
@@ -247,6 +269,16 @@ def getHourlyReturnTable(bid_ask_mid):
 	with_returns.columns = [c.replace('_Mid', '_Ret') for c in with_returns.columns]
 	return with_returns
 
+def getBidMidAskHourlyReturnTable(bid_ask_mid):
+	"""
+	For getting hourly returns in bid, mid, and ask.
+	Arguments:	bid_mid_ask, pandas DataFrame
+	Returns:	pandas DataFrame
+	"""
+	is_hourly_index = bid_ask_mid.index.minute == 0
+	with_returns = bid_ask_mid.loc[is_hourly_index, :].pct_change(fill_method=None)
+	return with_returns
+
 def AddMidReturnsCol(trading_frame, valid_start_end_off_datetimes):
 	"""
 	For adding a column of returns to the given trading frame. Returns are just the 
@@ -366,9 +398,215 @@ def getLinearModelFromDepIndep(dependent_ticker, independent_rets, hourly_return
 	shuffle_r_sq = shuffle_model.score(test_X, test_y)
 	return regression_model, r_sq, shuffle_r_sq
 
+#### END OF MULTIPLE REGRESSION
+
+##################### FILLING FORWARD ###################################################
+
+def getTickerRegressionModels(hourly_returns):
+	"""
+	For fitting a regression model for the returns of each ticker to ES1 Index returns and MS1 Index returns
+	or SGD returns for currencies. No intercept for easier coefficient retrieval.
+	Arguments:	hourly_returns, pandas DataFrame, the returns table
+	Returns:	ticker_to_model, dictionary, 
+	"""
+	ticker_to_model = {}
+	for c in hourly_returns.columns:
+		if c in special_mid_names: # ES1 Index, MES1 Index, SGD BDG Curncy
+			continue
+		ticker = extractTickerNameFromColumns(c)
+		returns_series = hourly_returns[c]
+		predictor_names = getPredictorNamesForTicker(ticker)
+		predictors = hourly_returns[predictor_names]
+		regression_model = fitRegressionModel(returns_series, predictors)
+		ticker_to_model[ticker] = regression_model
+	return ticker_to_model
+
+def getPredictorNamesForColumn(col_name):
+	"""
+	Get the columns names of the appropriate predictors given a ticker.
+	Arguments:	col_name, str
+	Returns:	list of str, column names for the hourly_returns frame
+	"""
+	ticker = extractTickerNameFromColumns(col_name)
+	col_end = col_name[-4:]
+	if ticker.endswith('Index') | ticker.endswith('Equity') | ticker.endswith('Comdty'):
+		predictor_names = ['ES1 Index', 'MES1 Index']
+	elif ticker.endswith('Curncy'):
+		predictor_names = ['SGD BGN Curncy']
+	else:
+		print(dt.datetime.now().isoformat() + ' ERR: ' + 'Unrecognised ticker! ' + ticker)
+		predictor_names = ['']
+	predictor_names = [p + col_end for p in predictor_names]
+	return predictor_names
+
+def getBidAskMidRegressionModels(bid_ask_mid_hourly_returns):
+	"""
+	For fitting regression models to bid ask and mid columns using the speically designated tickers.
+	No intercept.
+	Uses global constant 'special_ticker_names' defined at the top of this file.
+	Arguments:	bid_ask_mid_hourly_returns, pandas DataFrame, the returns table
+	Returns:	ticker_to_model, dictionary
+	"""
+	special_cols = getTickerBidAskMidRetColNames(ticker)
+	special_bids = [c for c in special_cols if c.find('_Bid') > -1]
+	special_asks = [c for c in special_cols if c.find('_Ask') > -1]
+	special_mids = [c for c in special_cols if c.find('_Mids') > -1]
+	col_to_model = {}
+	for c in bid_ask_mid_hourly_returns.columns:
+		if c in special_cols:
+			continue # we just fill those special columns forward eventually
+		returns_series = bid_ask_mid_hourly_returns[c]
+		predictor_names = getPredictorNamesForColumn(c)
+		predictors = bid_ask_mid_hourly_returns[predictor_names]
+		regression_model = fitRegressionModel(returns_series, predictors)
+		col_to_model[c] = regression_model
+	return col_to_model
+
+def fillSpecialColumns(bid_ask_mid):
+	"""
+	For filling the ES1 Index, MES1 Index, and SGD BGN Curncy columns forward, so that there are no blanks.
+	Arguments:	bid_ask_mid, pandas DataFrame
+	Returns:	special_filled, pandas DataFrame
+	"""
+	special_col_names = [c for c in bid_ask_mid.columns.to_list() 
+							if c.startswith('ES1') | c.startswith('MES1') | c.startswith('SGD')]
+	bid_ask_mid.loc[:,special_col_names] = bid_ask_mid.copy().loc[:,special_col_names].ffill()
+	return bid_ask_mid
+
+def getPredictorNamesForTicker(ticker, ret_or_mid='Ret'):
+	"""
+	Get the columns names of the appropriate predictors given a ticker.
+	Arguments:	ticker, str
+	Returns:	list of str, column names for the hourly_returns frame
+	"""
+	if ticker.endswith('Index') | ticker.endswith('Equity') | ticker.endswith('Comdty'):
+		predictor_names = ['ES1 Index_' + ret_or_mid, 'MES1 Index_' + ret_or_mid]
+	elif ticker.endswith('Curncy'):
+		predictor_names = ['SGD BGN Curncy_' + ret_or_mid]
+	else:
+		print(dt.datetime.now().isoformat() + ' ERR: ' + 'Unrecognised ticker! ' + ticker)
+		predictor_names = ['']
+	return predictor_names
+
+def fitRegressionModel(returns_series, predictors):
+	"""
+	For fitting a regression model for returns to ES1 Index and MS1 Index, or SGD
+	Arguments:	returns_series, pandas Series, the returns to be fitted, ie. 
+					regressand, endogenous variable, response variable, measured variable, criterion variable, 
+					or dependent variable
+				predictors, pandas DataFrame
+	Returns:	coefficients
+	"""
+	joined = returns_series.to_frame().join(predictors, how='outer')
+	proper_data = joined[joined.notna().all(axis=1) & (joined != np.inf).all(axis=1)]
+	if proper_data.shape[0] < 100:
+		print(dt.datetime.now().isoformat() + ' WARN: ' + 'Less than 100 rows of proper data.')
+	y = proper_data[returns_series.name].to_frame()
+	X = proper_data[predictors.columns]
+	regression_model = LassoCV(fit_intercept=False, n_jobs=-1)
+	regression_model.fit(X, y)
+	return regression_model
+
+def detectBlocksOfNulls(to_be_filled_index):
+	"""
+	For splitting the index of nulls into blocks with the same last valid index.
+	Arguments:	to_be_filled_index, list of datetimes
+	Returns:	null_blocks_indices, list of list of datetimes
+	"""
+	index_deltas = np.diff(to_be_filled_index)
+	big_difference_inds = [i+1 for i,d in enumerate(index_deltas) if d > dt.timedelta(minutes=1)]
+	starts_finishes = [0] + big_difference_inds + [None]
+	null_blocks_indices = []
+	for i,start in enumerate(starts_finishes[:-1]):
+		null_blocks_indices.append(to_be_filled_index[start:starts_finishes[i+1]])
+	return null_blocks_indices
+
+def modelNullBlock(for_filling, null_block_indices, ticker_to_model, mid_col_name, predictor_names):
+	"""
+	For modelling some mids for a block of nulls.
+	Arguments:	for_filling, pandas DataFrame, contains last valid quotes
+				null_block_indices, list of datetimes, the incides of the nulls
+				ticker_to_model, dictionary, ticker => regression model
+				mid_col_name, str
+				predictor_names, list of str
+	Returns:	modelled_series, pandas DataFrame, modelled mids
+	"""
+	ticker = extractTickerNameFromColumns(mid_col_name)
+	last_valid_ind = for_filling.loc[:null_block_indices[0]][mid_col_name].last_valid_index()
+	last_valid_record = for_filling.loc[last_valid_ind]
+	predictor_returns = for_filling.loc[null_block_indices][predictor_names]/last_valid_record[predictor_names] - 1
+	model_prediction = ticker_to_model.get(ticker).predict(predictor_returns).flatten()
+	modelled_mid = (1 + model_prediction) * last_valid_record[mid_col_name]
+	modelled_series = pd.Series(data=modelled_mid, name=mid_col_name, index=null_block_indices)
+	return modelled_series
+
+def fillRemainingBlanks(special_filled, ticker_to_model):
+	"""
+	For filling in the remaining mid price columns using our regression models.
+	Arguments: 	special_filled, pandas DataFrame
+				ticker_to_model, dictionary, ticker to linear model for returns
+	Returns:	pandas DataFrame
+	"""
+	mid_col_names = getMatchedColNames(special_filled, '_Mid')
+	for mid_col_name in mid_col_names:
+		if mid_col_name in special_mid_names:
+			continue
+		print(dt.datetime.now().isoformat() + ' INFO: ' + 'Filling ' + mid_col_name + '...')
+		ticker = extractTickerNameFromColumns(mid_col_name)
+		predictor_names = getPredictorNamesForTicker(ticker, 'Mid')
+		relevant_cols = special_filled[[mid_col_name] + predictor_names]
+		first_valid_ind = relevant_cols.loc[relevant_cols.notna().all(axis=1)].index[0]
+		for_filling = relevant_cols.loc[first_valid_ind:]
+		to_be_filled = for_filling.loc[for_filling[mid_col_name].isna()].copy()
+		null_blocks_indices = detectBlocksOfNulls(to_be_filled.index.to_list())
+		for null_block_indices in null_blocks_indices:
+			modelled_series = modelNullBlock(for_filling, null_block_indices, ticker_to_model, mid_col_name, predictor_names)
+			to_be_filled.update(modelled_series)
+		special_filled.update(to_be_filled[mid_col_name])
+	return special_filled[mid_col_names]
+
 ############### BACKTESTING STRATEGY ####################################################
 
-def getOpenTakeOffTradingFrame(bid_ask_mid, ticker_to_trade, indep_rets, start_trade_time, end_trade_time, take_off_time):
+def getReferenceQuoteFromBacktestingFrame(backtesting_frame, reference_datetime):
+	"""
+	For getting the reference, or 'fair price' quote from the backtesting frame.
+	Arguments:	backtesting_frame, pandas DataFrame, contains only bids, asks, mids for required cols
+				reference_datetime, datetime datetime, the 'fair price time' for some given day
+	Returns:	reference_fair_quote, pandas Series, contains bids, asks, and mids for required tickers at the required time
+				is_valid, boolean, the reference_fair_quote is not valid if it contains nulls
+	"""
+	reference_fair_quote = backtesting_frame.loc[reference_datetime]
+	is_valid = reference_fair_quote.notna().all()
+	return reference_fair_quote, is_valid
+
+def getTakeOffQuoteFromBacktestingFrame(backtesting_frame, take_off_datetime):
+	"""
+	For getting the 'take_off' quote from the backtesting frame.
+	Arguments:	backtesting_frame, pandas DataFrame, contains only bids, asks, mids for required cols
+				take_off_datetime, datetime datetime, the 'fair price time' for some given day
+	Returns:	take_off_quote, pandas Series, contains bids, asks, and mids for required tickers at the required time
+				is_valid, boolean, the take_off_quote is not valid if it contains nulls
+	"""
+	take_off_quote = backtesting_frame.loc[take_off_datetime]
+	is_valid = take_off_quote.notna().all()
+	return take_off_quote, is_valid
+
+def getReferenceAndTakeOffQuote(backtesting_frame, reference_datetime, take_off_datetime):
+	"""
+	For getting the take off quote and reference fair price quote.
+	Arguments:	backtesting_frame, pandas DataFrame contains only bids, asks, mids for required cols
+				reference_datetime, datetime datetime, the 'fair price time' for some given day
+				take_off_datetime, datetime datetime, the 'fair price time' for some given day
+	Returns:	reference_fair_quote, pandas Series, contains bids, asks, and mids for required tickers at the required time
+				take_off_quote, pandas Series, contains bids, asks, and mids for required tickers at the required time
+				is_valid, if one of these quotes contains nulls, we cannot continue
+	"""
+	reference_fair_quote, is_valid_reference = getReferenceQuoteFromBacktestingFrame(backtesting_frame, reference_datetime)
+	take_off_quote, is_valid_take_off = getTakeOffQuoteFromBacktestingFrame(backtesting_frame, take_off_datetime)
+	is_valid = is_valid_reference & is_valid_take_off
+	return reference_fair_quote, take_off_quote, is_valid
+
+def getOpenTakeOffTradingFrame(bid_ask_mid, ticker_to_trade, indep_rets, reference_time, start_trade_time, end_trade_time, take_off_time):
 	"""
 	For getting a dataframe containing the mid prices of the ticker to trade and the independent variables during the 
 	open times of the ticker to trade, and the take off times of the ticker to trade. Also returns the start, end, and
@@ -377,35 +615,49 @@ def getOpenTakeOffTradingFrame(bid_ask_mid, ticker_to_trade, indep_rets, start_t
 	Arguments:	bid_ask_mid, pandas DataFrame, this could also be the full_mids table with bids and asks.
 				ticker_to_trade, string,
 				indep_rets, list of strings,
+				reference_time, datetime time,
 				start_trade_time, datetime time,
 				end_trade_time, datetime time,
 				take_off_time, datetime time,
 	Returns:	trading_frame, contains data for times when the ticker_to_trade is open, and take off times
-				start_end_off_datetimes, list of lists of three items [start of trading, end, take off time]
-					one three item list per valid trading day
+				start_end_off_datetimes, list of lists of four items [reference_time, start of trading, end, take off time]
+					one four item list per valid trading day
 	"""
 	trade_dates = np.unique(bid_ask_mid.index.date)
 	start_end_off_datetimes = []
 	required_tickers, required_cols, bid_cols, ask_cols, mid_cols = getRequiredTradingCols(ticker_to_trade, indep_rets)
 	trading_frame = pd.DataFrame()
 	for date in trade_dates:
+		next_date = date + dt.timedelta(days=1)
+		reference_datetime = dt.datetime.combine(date, reference_time)
 		start_trade_datetime = dt.datetime.combine(date, start_trade_time)
 		end_trade_datetime = dt.datetime.combine(date, end_trade_time)
-		next_date = date + dt.timedelta(days=1)
 		take_off_datetime = dt.datetime.combine(next_date, take_off_time)
+		if not reference_datetime in bid_ask_mid.index:
+			print(dt.datetime.now().isoformat() + ' WARN: ' + 'Missing reference quote at time ' + reference_datetime.isoformat())
+			continue # if we don't have a reference time quote for fair prices, we can't trade
+		reference_quote = bid_ask_mid.loc[reference_datetime, required_cols]
+		if reference_quote.isna().any():
+			print(dt.datetime.now().isoformat() + ' WARN: ' + 'Invalid reference quote at time ' + reference_datetime.isoformat())
+			continue # if we don't have a valid quote at reference (fair price) time, we cannot trade
 		if not take_off_datetime in bid_ask_mid.index:
+			print(dt.datetime.now().isoformat() + ' WARN: ' + 'Missing take off quote at time ' + reference_datetime.isoformat())
 			continue # if we don't have a take off time quote, we can't trade
 		take_off_quote = bid_ask_mid.loc[take_off_datetime, required_cols]
 		if take_off_quote.isna().any():
+			print(dt.datetime.now().isoformat() + ' WARN: ' + 'Invalid take off quote at time ' + reference_datetime.isoformat())
 			continue # If we don't have a valid quote at the take off time, we cannot trade that day
 		is_trading_time = (bid_ask_mid.index >= start_trade_datetime) & (bid_ask_mid.index <= end_trade_datetime)
 		if not is_trading_time.any():
+			print(dt.datetime.now().isoformat() + ' WARN: ' + 'No data for  ' + date.isoformat())
 			continue # we don't have data for this date
 		session_trading_frame = bid_ask_mid.loc[is_trading_time, required_cols]
 		if not session_trading_frame.notna().all(axis=1).any():
+			print(dt.datetime.now().isoformat() + ' WARN: ' + 'No valid quotes for  ' + date.isoformat())
 			continue # if we don't have any valid quotes, we cannot trade
-		trading_frame = pd.concat([trading_frame, session_trading_frame, take_off_quote.to_frame().T])
-		start_end_off_datetimes += [[start_trade_datetime, end_trade_datetime, take_off_datetime]]
+		trading_frame = pd.concat([trading_frame, reference_quote.to_frame().T, session_trading_frame, take_off_quote.to_frame().T])
+		start_end_off_datetimes += [[reference_datetime, start_trade_datetime, end_trade_datetime, take_off_datetime]]
+	trading_frame.drop_duplicates(inplace=True) # if the reference or take off time is within the open session we can get duplicates
 	return trading_frame, start_end_off_datetimes
 
 def getModelledPriceForTicker(fair_price_dep, quoted_price_indep, fair_price_indep, returns_model):
