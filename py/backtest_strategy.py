@@ -237,6 +237,19 @@ def getTradeSummaryFrame(transactions, start_trade_datetime, end_trade_datetime)
 		'expected_return':sum, 'size':get_first, 'pl':sum, 'expected_pl':sum})
 	return agg_frame
 
+def printNumDaysTradesVsNumDaysPossible(backtesting_frame, trade_summary):
+	"""
+	For printing the number of days on which we traded vs the number of days on which we could have traded.
+	Arguments:	backtesting_frame, pandas DataFrame, days we have data
+				trade_summary, pandas DataFrame, trades
+	Returns:	nothing
+	"""
+	days_could_have_traded = np.unique(backtesting_frame.index.date)
+	days_we_traded = np.unique(trade_summary.index.date)
+	print(dt.datetime.now().isoformat() + ' INFO: ' + 'Could have traded on ' + str(len(days_could_have_traded)) + ' days.')
+	print(dt.datetime.now().isoformat() + ' INFO: ' + 'Traded on ' + str(len(days_we_traded)) + ' days.')
+	return None
+
 if not args.debug:
 	print(dt.datetime.now().isoformat() + ' INFO: ' + 'Loading in csvs...')
 	open_close = loadOpenCloseTimesCsv(csv_dir)
@@ -262,6 +275,7 @@ if not args.debug:
 		transactions = simulateDaysTrade(backtesting_frame, start_trade_datetime, end_trade_datetime, take_off_datetime, reference_datetime, ticker_to_trade, top_indep_rets, top_model, edge_required, lean, args.size, args.price_type)
 		trade_summary = pd.concat([trade_summary, getTradeSummaryFrame(transactions, start_trade_datetime, end_trade_datetime)])
 		all_transactions = pd.concat([all_transactions, transactions], ignore_index=True)
+	printNumDaysTradesVsNumDaysPossible(backtesting_frame, trade_summary)
 	if args.report_suffix != '':
 		trade_summary_csv_file_name = os.path.join(csv_dir, 'trade_summaries', 'trade_summary_' + args.report_suffix + '.csv')
 		trade_summary.index.name = 'transaction_time'

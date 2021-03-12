@@ -45,7 +45,7 @@ def addMidColumns(all_clean):
 	"""
 	tickers = extractTickerNameFromColumns(all_clean.columns.to_list())
 	for ticker in tickers:
-		bid_col_name, ask_col_name, mid_col_name = getTickerBidAskMidColNames(ticker)
+		bid_col_name, ask_col_name, mid_col_name, _ = getTickerBidAskMidRetColNames(ticker)
 		mid_col = all_clean[[bid_col_name, ask_col_name]].mean(axis=1)
 		all_clean[mid_col_name] = mid_col
 	return all_clean
@@ -71,6 +71,40 @@ def getCoefFrameForTickers(tickers_to_model, hourly_returns, open_close, thresh=
 	coef_frame['r_squared'] = pd.to_numeric(coef_frame['r_squared'])
 	return coef_frame
 
+def checkBidsLessThanAsks(fully_forward_filled):
+	"""
+	Checking that the bid columns are always less than the ask columns.
+	Arguments:	fully_forward_filled, pandas DataFrame a table with data fully forward filled.
+	Returns:	check_passed, boolean
+	"""
+	ask_columns = getMatchedColNames(fully_forward_filled, '_Ask')
+	bid_columns = getMatchedColNames(fully_forward_filled, '_Bid')
+	check_passed = True
+	for ask_col_name, bid_col_name in zip(ask_columns, bid_columns):
+		all_bids_lt_ask = np.all(fully_forward_filled[bid_col_name] < fully_forward_filled[ask_col_name])
+		check_passed = check_passed & all_bids_lt_ask
+	return check_passed
+
+def checkFullyForwardFilled(fully_forward_filled):
+	"""
+	Carry out some checks on this table before we save it down.
+	Arguments:	fully_forward_filled, pandas DataFrame
+	Returns:	checks_passed, boolean
+	"""
+	first_all_not_null_ind = fully_forward_filled.notna().all(axis=1).idxmax()
+	next_ind = first_all_not_null_ind + dt.timedelta(minutes=1)
+	has_no_nulls = fully_forward_filled.loc[first_all_not_null_ind:].notna().all().all()
+	if not has_no_nulls:
+		print(dt.datetime.now().isoformat() + ' WARN: ' + 'The fully filled forward table has nulls!')
+	has_no_jumps = (fully_forward_filled.pct_change() > 0.1).all().all()
+	if not has_no_jumps:
+		print(dt.datetime.now().isoformat() + ' WARN: ' + 'The fully filled forward table jumps of greater than 10%!')
+	bids_lt_asks = checkBidsLessThanAsks(fully_forward_filled)
+	if not bids_lt_asks:
+		print(dt.datetime.now().isoformat() + ' WARN: ' + 'The fully filled forward table has bids greater than asks!')
+	checks_passed = has_no_nulls & has_no_jumps & bids_lt_asks
+	return checks_passed
+
 if not args.debug:
 	print(dt.datetime.now().isoformat() + ' INFO: ' + 'Starting main function...')
 	all_clean = loadCleanBidAsk(csv_dir)
@@ -80,9 +114,7 @@ if not args.debug:
 		bid_ask_mid.to_csv(bid_ask_mid_file_name)
 		print(dt.datetime.now().isoformat() + ' INFO: ' + 'Saved: ' + bid_ask_mid_file_name)
 	bid_ask_mid_hourly_returns = getBidMidAskHourlyReturnTable(bid_ask_mid)
-	getBidAskMidRegressionModels(bid_ask_mid_hourly_returns)
-	ticker_to_model = getTickerRegressionModels(hourly_returns) # we model before filling the special columns to preserve data integrity
-	col_to_model...
+	ticker_to_model = getTickerRegressionModels(bid_ask_mid_hourly_returns) # we model before filling the special columns to preserve data integrity
 	print(dt.datetime.now().isoformat() + ' INFO: ' + 'Stage 2 done.')
 	special_filled = fillSpecialColumns(bid_ask_mid.copy())
 	tickers_to_model = ['KWN+1M BGN Curncy', 'IHN+1M BGN Curncy', 'FXY1 KMS1 Index', 'MXID Index']
@@ -92,7 +124,10 @@ if not args.debug:
 	coef_frame.to_csv(coef_frame_file_name)
 	print(dt.datetime.now().isoformat() + ' INFO: ' + 'Saved: ' + coef_frame_file_name)
 	if args.fill_all:
-		full_mids = fillRemainingBlanks(special_filled.copy(), ticker_to_model)
-		full_mids_file_name = os.path.join(csv_dir, 'full_mids.csv')
-		full_mids.to_csv(full_mids_file_name)
+		fully_forward_filled = fillRemainingBlanks(special_filled.copy())
+		checkFullyForwardFilled(fully_forward_filled)
+		fully_forward_filled_file_name = os.path.join(csv_dir, 'fully_forward_filled.csv')
+		print(dt.datetime.now().isoformat() + ' INFO: ' + 'Saving...')
+		fully_forward_filled.to_csv(fully_forward_filled_file_name)
+		print(dt.datetime.now().isoformat() + ' INFO: ' + 'Saved: ' + fully_forward_filled_file_name)
 	print(dt.datetime.now().isoformat() + ' INFO: ' + 'Done. ' + full_mids_file_name)
