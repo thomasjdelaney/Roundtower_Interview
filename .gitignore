@@ -10,4 +10,5 @@ csv/coef_frame.csv
 csv/bid_ask_mid.csv
 csv/fully_forward_filled.csv
 csv/All_Fut_FX_Data*
-csv/trade_summaries/
+csv/trade_summaries/*
+csv/trade_summary*

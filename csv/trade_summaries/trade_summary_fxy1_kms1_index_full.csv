@@ -1,1 +1,0 @@
-transaction_time,ticker,transaction_type,price,size,position_before,position_after,modelled_price,max_bid,min_ask,return,expected_return,pl,expected_pl
